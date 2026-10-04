@@ -15,7 +15,7 @@ ExperimentSpec -> DatasetVersion -> FoldPlan -> ModelCandidate -> TrainingJob
 Contracts are immutable, schema-versioned records with deterministic SHA-256 identities.
 URIs are locations and do not alter content identities. Dataset manifests and preprocessing
 configuration are identity-bearing. FoldPlan records a reproducible declaration only; it
-does not split patient data. Candidate contracts describe configuration without bundling a
+ does not split patient data. Candidate contracts describe configuration without bundling a
 network implementation.
 
 `TrainingJob` carries candidate, dataset, fold, CPU/GPU resources, and configuration.
@@ -35,6 +35,19 @@ provider-neutral. Configuration and artifact schemas are versioned. The smoke co
 placeholder class names; replace them with the competition's canonical target labels before
 real experiments.
 
+## Dataset discovery
+
 The independent `rsna.data` layer discovers DICOM headers, records Study/Series/Slice
 metadata, and writes a deterministic JSON manifest. It does not decode pixels or perform
 anatomical ordering; see [DATA_INDEX.md](DATA_INDEX.md).
+
+## DICOM metadata audit
+
+`rsna.data` provides metadata-only orientation and laterality descriptions. DICOM
+ImageOrientationPatient geometry drives anatomical plane classification; structured
+Laterality/ImageLaterality fields take precedence over conservative text-token fallback.
+Conflicting evidence remains ambiguous and is retained with warnings and confidence in
+serializable provenance. Normalization defaults to `preserve_native`; the optional
+left-canonical mode describes a future operation but does not change pixels. Any future
+applied transform must be included in `DatasetVersion.preprocessing` so dataset identity
+reflects the changed preprocessing. See [ORIENTATION_LATERALITY.md](ORIENTATION_LATERALITY.md).
