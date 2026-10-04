@@ -7,7 +7,7 @@ DICOM pipeline, real fold assignment, or final Kaggle notebook.
 
 ## Quick start
 
-Python 3.11 or newer; the core has no runtime dependencies.
+Python 3.11 or newer; DICOM metadata indexing uses `pydicom`.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -23,3 +23,12 @@ boundaries and do not provision or assume a particular vendor or cluster.
 
 See [architecture](docs/ARCHITECTURE.md), [target and label contracts](docs/TARGETS_AND_LABELS.md),
 and [migration notes](docs/MIGRATION.md).
+
+Dataset metadata can be indexed without decoding image pixels:
+
+```bash
+python -m rsna data-index --input /data/rsna --output artifacts/dataset-index
+```
+
+See [dataset indexing](docs/DATA_INDEX.md) for discovery rules, manifest loading, and
+the `DatasetVersion` binding.

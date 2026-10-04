@@ -25,6 +25,7 @@ class DatasetVersion:
     uri: str = ""
     schema_version: int = SCHEMA_VERSION
     dataset_version_id: str = ""
+    dataset_index_artifact_id: str | None = None
     synthetic: bool = False
     target_schema_version: int = TARGET_SCHEMA_VERSION
 
@@ -33,6 +34,8 @@ class DatasetVersion:
         _required_text(self.version, "dataset version")
         _required_text(self.preprocessing_version, "preprocessing version")
         _sha256(self.source_manifest_sha256, "source_manifest_sha256")
+        if self.dataset_index_artifact_id is not None:
+            _sha256(self.dataset_index_artifact_id, "dataset_index_artifact_id")
         _unique_names(self.class_names, "class_names")
         if type(self.synthetic) is not bool:
             raise ValueError("synthetic must be a boolean")
@@ -41,14 +44,19 @@ class DatasetVersion:
         _schema(self.schema_version)
         object.__setattr__(self, "class_names", tuple(self.class_names))
         object.__setattr__(self, "preprocessing", freeze_json(self.preprocessing))
-        expected = digest({"schema_version": self.schema_version, "name": self.name,
+        identity_data = {"schema_version": self.schema_version, "name": self.name,
                            "version": self.version,
                            "source_manifest_sha256": self.source_manifest_sha256,
+                           "dataset_index_artifact_id": self.dataset_index_artifact_id,
                            "preprocessing_version": self.preprocessing_version,
                            "preprocessing": self.preprocessing,
-                           "class_names": self.class_names, "synthetic": self.synthetic,
-                           "target_schema_version": self.target_schema_version,
-                           "target_registry_id": TARGET_REGISTRY_ID})
+                           "class_names": self.class_names}
+        if self.dataset_index_artifact_id is None:
+            identity_data.pop("dataset_index_artifact_id")
+        identity_data.update(synthetic=self.synthetic,
+                              target_schema_version=self.target_schema_version,
+                              target_registry_id=TARGET_REGISTRY_ID)
+        expected = digest(identity_data)
         _match_id(self.dataset_version_id, expected, "dataset_version_id")
         object.__setattr__(self, "dataset_version_id", expected)
 
@@ -56,6 +64,7 @@ class DatasetVersion:
         return {"name": self.name, "version": self.version,
                 "source_manifest_sha256": self.source_manifest_sha256,
                 "preprocessing_version": self.preprocessing_version,
+                "dataset_index_artifact_id": self.dataset_index_artifact_id,
                 "class_names": list(self.class_names),
                 "preprocessing": jsonable(self.preprocessing), "uri": self.uri,
                 "synthetic": self.synthetic, "target_schema_version": self.target_schema_version,

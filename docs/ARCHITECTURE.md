@@ -15,7 +15,7 @@ ExperimentSpec -> DatasetVersion -> FoldPlan -> ModelCandidate -> TrainingJob
 Contracts are immutable, schema-versioned records with deterministic SHA-256 identities.
 URIs are locations and do not alter content identities. Dataset manifests and preprocessing
 configuration are identity-bearing. FoldPlan records a reproducible declaration only; it
-does not split patient data. Candidate contracts describe configuration without bundling a
+ does not split patient data. Candidate contracts describe configuration without bundling a
 network implementation.
 
 `TrainingJob` carries candidate, dataset, fold, CPU/GPU resources, and configuration.
@@ -38,6 +38,12 @@ provider-neutral. Configuration and artifact schemas are versioned. The smoke co
 explicitly opts into synthetic placeholder names. See
 [TARGETS_AND_LABELS.md](TARGETS_AND_LABELS.md) for the official source, canonical order,
 missing-label policy, and provenance contract.
+
+## Dataset discovery
+
+The independent `rsna.data` layer discovers DICOM headers, records Study/Series/Slice
+metadata, and writes a deterministic JSON manifest. It does not decode pixels or perform
+anatomical ordering; see [DATA_INDEX.md](DATA_INDEX.md).
 
 ## DICOM metadata audit
 
