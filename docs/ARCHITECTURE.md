@@ -5,6 +5,11 @@ multi-class MRI classification workflow and removes the unrelated prior domain.
 No model architecture, pixel decoder, real fold generation, heavy training, or Kaggle
 notebook is implemented here.
 
+The data metadata layer provides deterministic DICOM series ordering from patient-space
+geometry when available. See [DICOM_GEOMETRY.md](DICOM_GEOMETRY.md) for the normal,
+projected coordinate, fallbacks, and diagnostics contract. This layer consumes already
+loaded metadata and does not decode pixels.
+
 ## Data flow
 
 ```text
@@ -51,3 +56,9 @@ serializable provenance. Normalization defaults to `preserve_native`; the option
 left-canonical mode describes a future operation but does not change pixels. Any future
 applied transform must be included in `DatasetVersion.preprocessing` so dataset identity
 reflects the changed preprocessing. See [ORIENTATION_LATERALITY.md](ORIENTATION_LATERALITY.md).
+
+## Slice geometry and ordering
+
+DICOM MRI slices are ordered by ascending projection onto the normal computed from
+ImageOrientationPatient. Geometry diagnostics and deterministic whole-series fallbacks
+are documented in [DICOM_GEOMETRY.md](DICOM_GEOMETRY.md).
