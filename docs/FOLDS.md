@@ -75,3 +75,7 @@ includes per-fold and total study, patient, series, slice, and group counts when
 available; target positive, negative, soft, missing, supervision, positive-support,
 and prevalence counts; size and prevalence imbalance diagnostics; and warnings for
 rare targets. Unknown slice counts remain `null`.
+
+The extended CLI uses the canonical Issue 6 FoldPlanManifest and generator, and calls the Issue 7 Leakage Guard for canonical index validation. It adds dataset-aware validation, inspect, stats, diff, CSV/JSON export, CSV import, and locking.
+
+Example: python -m rsna folds generate --dataset-manifest artifacts/dataset-index/manifest.json --output artifacts/folds/foldplan-v1.json --n-folds 5 --strategy group --seed 42
