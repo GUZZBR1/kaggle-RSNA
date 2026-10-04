@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -173,21 +174,84 @@ class DatasetIndex:
 
 
 def index_from_dict(data: dict[str, Any]) -> DatasetIndex:
-    if data.get("manifest_schema_version") != 1:
+    _manifest_record(data, {
+        "manifest_schema_version": int, "root_identity": str, "discovery_version": str,
+        "studies": list, "warnings": list, "statistics": dict,
+        "metadata_files": list, "index_id": str,
+    }, "manifest")
+    if type(data["manifest_schema_version"]) is not int or data["manifest_schema_version"] != 1:
         raise ValueError("unsupported dataset manifest schema version")
+    if any(type(count) is not int or count < 0 for count in data["statistics"].values()):
+        raise ValueError("manifest.statistics values must be nonnegative integers")
+    if any(not isinstance(path, str) for path in data["metadata_files"]):
+        raise ValueError("manifest.metadata_files must contain strings")
     studies = []
     for study in data["studies"]:
+        _manifest_record(study, {"study_instance_uid": (str, type(None)),
+            "patient_id": (str, type(None)), "series": list, "warnings": list, "study_id": str}, "study")
         series = []
         for item in study["series"]:
+            _manifest_record(item, {"series_instance_uid": (str, type(None)),
+                "study_instance_uid": (str, type(None)), "slices": list,
+                "warnings": list, "series_id": str}, "series")
+            for slice_data in item["slices"]:
+                _manifest_record(slice_data, {"relative_path": str, "file_size": int,
+                    "metadata": dict, "warnings": list, "slice_id": str}, "slice")
+                if type(slice_data["file_size"]) is not int or slice_data["file_size"] < 0:
+                    raise ValueError("slice.file_size must be a nonnegative integer")
+                _json_metadata(slice_data["metadata"])
             slices = [SliceRecord(**slice_data) for slice_data in item["slices"]]
             series.append(SeriesRecord(item.get("series_instance_uid"),
                 item.get("study_instance_uid"), tuple(slices), tuple(item.get("warnings", ())),
                 item.get("series_id", "")))
         studies.append(StudyRecord(study.get("study_instance_uid"), study.get("patient_id"),
             tuple(series), tuple(study.get("warnings", ())), study.get("study_id", "")))
-    return DatasetIndex(data["root_identity"], data["discovery_version"], tuple(studies),
+    index = DatasetIndex(data["root_identity"], data["discovery_version"], tuple(studies),
         tuple(data.get("warnings", ())), data["statistics"], tuple(data.get("metadata_files", ())),
         data.get("index_id", ""))
+    # Derived fields are persisted for readers, but must agree with the canonical records.
+    canonical = index.to_dict()
+    for raw_study in data["studies"]:
+        study = next(value for value in canonical["studies"] if value["study_id"] == raw_study["study_id"])
+        _derived_fields(raw_study, study, ("metadata", "relative_paths"), "study")
+        for raw_series in raw_study["series"]:
+            series = next(value for value in study["series"] if value["series_id"] == raw_series["series_id"])
+            _derived_fields(raw_series, series, ("metadata", "relative_paths", "n_slices"), "series")
+    return index
+
+
+def _manifest_record(value: Any, fields: dict[str, Any], entity: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{entity} must be an object")
+    for name, kind in fields.items():
+        if name not in value or not isinstance(value[name], kind):
+            raise ValueError(f"{entity}.{name} is required and has an invalid type")
+        if name in {"slice_id", "series_id", "study_id", "index_id"} and (not value[name] or len(value[name]) != 64):
+            raise ValueError(f"{entity}.{name} must be a content SHA-256 ID")
+    if any(not isinstance(warning, str) for warning in value.get("warnings", ())):
+        raise ValueError(f"{entity}.warnings must contain strings")
+
+
+def _json_metadata(value: Any) -> None:
+    if value is None or type(value) in (str, bool, int):
+        return
+    if type(value) is float and math.isfinite(value):
+        return
+    if isinstance(value, list):
+        for item in value:
+            _json_metadata(item)
+        return
+    if isinstance(value, dict) and all(isinstance(key, str) for key in value):
+        for item in value.values():
+            _json_metadata(item)
+        return
+    raise ValueError("slice.metadata must contain finite JSON values")
+
+
+def _derived_fields(raw: dict[str, Any], canonical: dict[str, Any], fields: tuple[str, ...], entity: str) -> None:
+    for name in fields:
+        if name in raw and (type(raw[name]) is not type(canonical[name]) or raw[name] != canonical[name]):
+            raise ValueError(f"{entity}.{name} does not match its canonical records")
 
 
 def _identity(actual: str, expected: str, name: str) -> None:
