@@ -1,3 +1,4 @@
+import json
 import random
 import unittest
 from dataclasses import dataclass
@@ -171,6 +172,7 @@ class DicomGeometryTests(unittest.TestCase):
         result = self.order([invalid])
         self.assertIn("invalid_orientation", {w.code for w in result.warnings})
         self.assertIsInstance(result.to_dict()["diagnostics"]["warnings"], list)
+        self.assertIsInstance(json.dumps(result.to_dict()), str)
 
     def test_nonfinite_cross_product_input_is_rejected(self):
         with self.assertRaises(ValueError):
