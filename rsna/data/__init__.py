@@ -2,8 +2,8 @@
 
 from .cache import INDEX_SCHEMA_VERSION, IndexResult, RefreshReport, load_or_refresh
 from .dicom import read_dicom_metadata
-from .folds import make_fold_assignments
-from .geometry import GeometryConfig, OrderingResult, order_series_slices
+from .geometry import (GeometryConfig, GeometryWarning, OrderingResult, SeriesGeometry,
+                       order_series_slices)
 from .index import discover_dataset
 from .laterality import (LateralityEvidence, LateralityResolution, parse_laterality_text,
                          resolve_series_laterality, resolve_study_laterality)
@@ -17,12 +17,13 @@ from .selection import SliceSelectionConfig, SliceSelectionResult, SliceSelector
 from .smoke import run_data_smoke
 from .synthetic import SyntheticConfig, generate_synthetic_dataset
 
-__all__ = ["INDEX_SCHEMA_VERSION", "IndexResult", "RefreshReport", "load_or_refresh", "DatasetIndex", "LateralityEvidence", "LateralityResolution", "NormalizationPlan",
+__all__ = ["INDEX_SCHEMA_VERSION", "IndexResult", "RefreshReport", "load_or_refresh", "DatasetIndex",
+           "LateralityEvidence", "LateralityResolution", "NormalizationPlan",
            "OrientationConfig", "OrientationDescriptor", "OrientationProvenance", "SeriesRecord",
-           "SliceRecord", "StudyRecord", "assess_orientation_consistency", "build_normalization_plan",
+           "SliceRecord", "StudyRecord", "SliceSelectionConfig", "SliceSelectionResult", "SliceSelector",
+           "GeometryConfig", "OrderingResult", "SeriesGeometry", "GeometryWarning",
+           "assess_orientation_consistency", "build_normalization_plan",
            "build_orientation_provenance", "describe_series_orientation", "discover_dataset",
            "load_manifest", "parse_laterality_text", "read_dicom_metadata", "resolve_series_laterality",
-           "resolve_study_laterality", "save_manifest", "make_fold_assignments",
-           "GeometryConfig", "OrderingResult", "order_series_slices",
-           "SliceSelectionConfig", "SliceSelectionResult", "SliceSelector", "select_slices",
+           "resolve_study_laterality", "save_manifest", "select_slices", "order_series_slices",
            "run_data_smoke", "SyntheticConfig", "generate_synthetic_dataset"]

@@ -6,8 +6,8 @@ This CPU-only check provides a runnable integration proof for the metadata and d
 preparation path without downloading competition data. It creates small synthetic DICOM
 series and labels, then exercises discovery, the metadata cache, geometry ordering,
 orientation and laterality, slice selection, the official TargetRegistry order with
-synthetic labels, patient-grouped folds,
-leakage checks, and the `DatasetVersion`/`FoldPlan` contracts. It does not train a model.
+synthetic labels, the canonical deterministic fold-plan generator and manifest, strict
+LeakageGuard checks, and the `DatasetVersion` contract. It does not train a model.
 
 ## Run it
 
@@ -42,7 +42,8 @@ validated.
   change.
 - The cache runs cold then warm. The warm run must reuse parsed metadata and reparse zero
   files.
-- A fold-seed change preserves the dataset identity and changes the `FoldPlan` ID.
+- A fold-seed change preserves the dataset identity and changes the canonical fold
+  manifest ID.
 - JSON index and assignment artifacts are reloaded and selection, labels, fold assignments,
   target order, and leakage results are compared.
 - The data is copied to a second absolute output directory; source, dataset, fold, and

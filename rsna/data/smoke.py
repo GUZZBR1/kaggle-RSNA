@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import csv
 from dataclasses import asdict
-import hashlib
 import json
 from pathlib import Path
 import shutil
 import time
 from typing import Any
 
-from ..contracts import DatasetVersion, FoldPlan
-from ..identity import canonical_json, digest
+from ..contracts import DatasetVersion
+from ..folds import generate_fold_plan, load_fold_plan, save_fold_plan
+from ..identity import digest
 from ..leakage import (LeakagePolicy, LeakageValidationError,
                        require_valid_leakage_report, validate_leakage)
 from ..targets import TARGET_REGISTRY, TARGET_REGISTRY_ID
 from .cache import load_or_refresh
-from .folds import make_fold_assignments
 from .geometry import order_series_slices
 from .laterality import resolve_series_laterality
 from .manifest import load_manifest, save_manifest
@@ -177,7 +176,9 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     if len({dataset.dataset_version_id, dataset_uniform.dataset_version_id,
             dataset_32.dataset_version_id}) != 3:
         raise AssertionError("preprocessing changes did not alter DatasetVersion identity")
-    assignments = make_fold_assignments(index, seed=seed, n_folds=5)
+    fold_plan = generate_fold_plan(index, n_folds=5, strategy="group", random_state=seed,
+        labels=target_rows, dataset_version_id=dataset.dataset_version_id)
+    assignments = dict(fold_plan.assignments)
     leakage_result = validate_leakage(index, assignments=assignments,
         policy=LeakagePolicy.STRICT, dataset_version_id=dataset.dataset_version_id)
     if injection == "patient-leakage":
@@ -201,15 +202,9 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     require_valid_leakage_report(leakage_result)
     leakage = leakage_result.to_dict()
     leakage_counts = _leakage_counts(leakage_result)
-    fold_ids = tuple(f"fold_{i}" for i in range(5))
-    assignments_sha = hashlib.sha256(canonical_json(assignments).encode()).hexdigest()
-    fold_plan = FoldPlan(dataset.dataset_version_id, "patient-grouped-kfold", fold_ids, seed,
-        assignment_manifest_sha256=assignments_sha, synthetic=True,
-        configuration={"n_splits": 5, "group": "patient_id"})
-    other_folds = make_fold_assignments(index, seed=seed + 1, n_folds=5)
-    other_plan = FoldPlan(dataset.dataset_version_id, "patient-grouped-kfold", fold_ids, seed + 1,
-        assignment_manifest_sha256=hashlib.sha256(canonical_json(other_folds).encode()).hexdigest(),
-        synthetic=True, configuration={"n_splits": 5, "group": "patient_id"})
+    fold_ids = tuple(f"fold_{i}" for i in range(fold_plan.n_folds))
+    other_plan = generate_fold_plan(index, n_folds=5, strategy="group", random_state=seed + 1,
+        labels=target_rows, dataset_version_id=dataset.dataset_version_id)
     if fold_plan.fold_plan_id == other_plan.fold_plan_id:
         raise AssertionError("fold seed change did not change FoldPlan identity")
 
@@ -220,7 +215,7 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         "label_source": "synthetic", "positive_values": [1], "negative_values": [0],
         "missing_is_negative": False})
     _write_json(root / "folds" / "assignments.json", assignments)
-    _write_json(root / "folds" / "fold-plan.json", fold_plan.to_dict())
+    save_fold_plan(fold_plan, root / "folds" / "fold-plan.json")
     _write_json(root / "folds" / "seed-change.json", {"same_dataset_version_id": dataset.dataset_version_id,
         "fold_plan_id": fold_plan.fold_plan_id, "other_seed_fold_plan_id": other_plan.fold_plan_id})
     _write_json(root / "reports" / "geometry.json", orientation_results)
@@ -242,7 +237,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     # Close and reload the persisted representations, then recompute their material decisions.
     reloaded = load_manifest(index2 / "manifest.json")
     reloaded_assignments = json.loads((root / "folds" / "assignments.json").read_text(encoding="utf-8"))
-    reloaded_fold_plan = json.loads((root / "folds" / "fold-plan.json").read_text(encoding="utf-8"))
+    reloaded_fold_plan = load_fold_plan(root / "folds" / "fold-plan.json",
+        dataset_version_id=dataset.dataset_version_id, dataset=reloaded).to_dict()
     reloaded_target_schema = json.loads((index2 / "target-schema.json").read_text(encoding="utf-8"))
     reloaded_labels = _load_targets(raw / "targets.csv")
     reloaded_selections = []
@@ -257,7 +253,7 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     if reloaded.index_id != index.index_id or digest(reloaded_assignments) != digest(assignments):
         raise AssertionError("manifest or fold assignment changed across serialization")
     if (reloaded_fold_plan["fold_plan_id"] != fold_plan.fold_plan_id or
-            reloaded_fold_plan["fold_ids"] != list(fold_ids) or
+            reloaded_fold_plan["n_folds"] != len(fold_ids) or
             reloaded_target_schema["target_schema_id"] != target_schema_id or
             reloaded_target_schema["target_registry"]["targets"] != TARGET_REGISTRY.to_dict()["targets"] or
             digest(reloaded_labels) != label_identity):
@@ -274,10 +270,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     location_dataset = DatasetVersion("synthetic-rsna", f"seed-{seed}", location_result.index.index_id,
         "synthetic-smoke-v1", tuple(TARGETS), preprocessing=preprocessing24,
         dataset_index_artifact_id=location_result.index.index_id, synthetic=True)
-    location_assignments = make_fold_assignments(location_result.index, seed=seed, n_folds=5)
-    location_fold_plan = FoldPlan(location_dataset.dataset_version_id, "patient-grouped-kfold", fold_ids, seed,
-        assignment_manifest_sha256=hashlib.sha256(canonical_json(location_assignments).encode()).hexdigest(),
-        synthetic=True, configuration={"n_splits": 5, "group": "patient_id"})
+    location_fold_plan = generate_fold_plan(location_result.index, n_folds=5, strategy="group",
+        random_state=seed, labels=target_rows, dataset_version_id=location_dataset.dataset_version_id)
     location_selections = []
     for study in location_result.index.studies:
         for series in study.series:
