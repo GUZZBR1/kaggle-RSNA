@@ -12,6 +12,7 @@ from .targets import (TARGETS, TARGET_REGISTRY_ID,
                       TARGET_SCHEMA_VERSION, validate_targets)
 
 SCHEMA_VERSION = 1
+DATASET_VERSION_SCHEMA = 2
 
 
 @dataclass(frozen=True)
@@ -23,11 +24,12 @@ class DatasetVersion:
     class_names: tuple[str, ...]
     preprocessing: Mapping[str, Any] = field(default_factory=dict)
     uri: str = ""
-    schema_version: int = SCHEMA_VERSION
+    schema_version: int = DATASET_VERSION_SCHEMA
     dataset_version_id: str = ""
     dataset_index_artifact_id: str | None = None
     synthetic: bool = False
     target_schema_version: int = TARGET_SCHEMA_VERSION
+    target_registry_id: str | None = None
 
     def __post_init__(self) -> None:
         _required_text(self.name, "dataset name")
@@ -39,9 +41,14 @@ class DatasetVersion:
         _unique_names(self.class_names, "class_names")
         if type(self.synthetic) is not bool:
             raise ValueError("synthetic must be a boolean")
-        validate_targets(self.class_names, allow_synthetic=self.synthetic)
-        _target_schema(self.target_schema_version)
-        _schema(self.schema_version)
+        _dataset_schema(self.schema_version)
+        target_bound = self.schema_version >= DATASET_VERSION_SCHEMA or self.target_registry_id is not None
+        if target_bound:
+            _target_schema(self.target_schema_version)
+            if self.target_registry_id not in (None, TARGET_REGISTRY_ID):
+                raise ValueError("target registry identity does not match this version")
+            validate_targets(self.class_names, allow_synthetic=self.synthetic)
+            object.__setattr__(self, "target_registry_id", TARGET_REGISTRY_ID)
         object.__setattr__(self, "class_names", tuple(self.class_names))
         object.__setattr__(self, "preprocessing", freeze_json(self.preprocessing))
         identity_data = {"schema_version": self.schema_version, "name": self.name,
@@ -53,30 +60,39 @@ class DatasetVersion:
                            "class_names": self.class_names}
         if self.dataset_index_artifact_id is None:
             identity_data.pop("dataset_index_artifact_id")
-        identity_data.update(synthetic=self.synthetic,
-                              target_schema_version=self.target_schema_version,
-                              target_registry_id=TARGET_REGISTRY_ID)
+        if target_bound:
+            identity_data.update(synthetic=self.synthetic,
+                                 target_schema_version=self.target_schema_version,
+                                 target_registry_id=TARGET_REGISTRY_ID)
         expected = digest(identity_data)
         _match_id(self.dataset_version_id, expected, "dataset_version_id")
         object.__setattr__(self, "dataset_version_id", expected)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "version": self.version,
+        payload = {"name": self.name, "version": self.version,
                 "source_manifest_sha256": self.source_manifest_sha256,
                 "preprocessing_version": self.preprocessing_version,
                 "dataset_index_artifact_id": self.dataset_index_artifact_id,
                 "class_names": list(self.class_names),
                 "preprocessing": jsonable(self.preprocessing), "uri": self.uri,
-                "synthetic": self.synthetic, "target_schema_version": self.target_schema_version,
-                "target_registry_id": TARGET_REGISTRY_ID,
                 "schema_version": self.schema_version,
                 "dataset_version_id": self.dataset_version_id}
+        if self.target_registry_id is not None:
+            payload.update(synthetic=self.synthetic,
+                           target_schema_version=self.target_schema_version,
+                           target_registry_id=self.target_registry_id)
+        return payload
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "DatasetVersion":
-        _verify_target_registry(data)
         payload = dict(data)
-        payload.pop("target_registry_id")
+        registry_id = payload.get("target_registry_id")
+        schema_version = payload.get("schema_version", 1)
+        if registry_id is not None:
+            _verify_target_registry(payload)
+        elif schema_version >= DATASET_VERSION_SCHEMA:
+            raise ValueError("serialized target registry identity is required for DatasetVersion schema 2")
+        payload["target_registry_id"] = registry_id
         return cls(**payload)
 
 
@@ -674,6 +690,11 @@ def _sha256(value: str, label: str) -> None:
 def _schema(value: int) -> None:
     if value != SCHEMA_VERSION:
         raise ValueError(f"unsupported schema version: {value}")
+
+
+def _dataset_schema(value: int) -> None:
+    if type(value) is not int or value not in (1, DATASET_VERSION_SCHEMA):
+        raise ValueError(f"unsupported DatasetVersion schema version: {value}")
 
 
 def _target_schema(value: int) -> None:
