@@ -23,6 +23,8 @@ class OrientationConfig:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 90:
                 raise ValueError(f"{name} must be between 0 and 90 degrees")
+        if self.minor_variation_deg > self.orientation_consistency_tolerance_deg:
+            raise ValueError("minor_variation_deg cannot exceed orientation_consistency_tolerance_deg")
         if self.normalization_mode not in {"preserve_native", "left_canonical"}:
             raise ValueError("normalization_mode must be preserve_native or left_canonical")
         if self.conflict_policy not in {"ambiguous", "unknown"}:

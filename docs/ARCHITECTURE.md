@@ -2,8 +2,13 @@
 
 This repository is a foundation for the RSNA Knee Abnormality Detection competition, a
 multi-class MRI classification workflow and removes the unrelated prior domain.
-No model architecture, DICOM reader, real fold generation, heavy training, or Kaggle
+No model architecture, pixel decoder, real fold generation, heavy training, or Kaggle
 notebook is implemented here.
+
+The data metadata layer provides deterministic DICOM series ordering from patient-space
+geometry when available. See [DICOM_GEOMETRY.md](DICOM_GEOMETRY.md) for the normal,
+projected coordinate, fallbacks, and diagnostics contract. This layer consumes already
+loaded metadata and does not decode pixels.
 
 ## Data flow
 
@@ -15,7 +20,7 @@ ExperimentSpec -> DatasetVersion -> FoldPlan -> ModelCandidate -> TrainingJob
 Contracts are immutable, schema-versioned records with deterministic SHA-256 identities.
 URIs are locations and do not alter content identities. Dataset manifests and preprocessing
 configuration are identity-bearing. FoldPlan records a reproducible declaration only; it
-does not split patient data. Candidate contracts describe configuration without bundling a
+ does not split patient data. Candidate contracts describe configuration without bundling a
 network implementation.
 
 `TrainingJob` carries candidate, dataset, fold, CPU/GPU resources, and configuration.
@@ -35,6 +40,12 @@ provider-neutral. Configuration and artifact schemas are versioned. The smoke co
 placeholder class names; replace them with the competition's canonical target labels before
 real experiments.
 
+## Dataset discovery
+
+The independent `rsna.data` layer discovers DICOM headers, records Study/Series/Slice
+metadata, and writes a deterministic JSON manifest. It does not decode pixels or perform
+anatomical ordering; see [DATA_INDEX.md](DATA_INDEX.md).
+
 ## DICOM metadata audit
 
 `rsna.data` provides metadata-only orientation and laterality descriptions. DICOM
@@ -45,3 +56,9 @@ serializable provenance. Normalization defaults to `preserve_native`; the option
 left-canonical mode describes a future operation but does not change pixels. Any future
 applied transform must be included in `DatasetVersion.preprocessing` so dataset identity
 reflects the changed preprocessing. See [ORIENTATION_LATERALITY.md](ORIENTATION_LATERALITY.md).
+
+## Slice geometry and ordering
+
+DICOM MRI slices are ordered by ascending projection onto the normal computed from
+ImageOrientationPatient. Geometry diagnostics and deterministic whole-series fallbacks
+are documented in [DICOM_GEOMETRY.md](DICOM_GEOMETRY.md).

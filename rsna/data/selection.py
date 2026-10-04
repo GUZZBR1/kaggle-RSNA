@@ -7,7 +7,11 @@ from dataclasses import dataclass, field
 import math
 from typing import Any, Mapping, Sequence
 
-ORDERING_ASSUMPTION = "explicit_mm_or_projected_ipp; tie_break_sop_path; else_preserve_input_order"
+from ..identity import digest
+from .geometry import OrderingResult, order_series_slices
+
+ORDERING_ASSUMPTION = "geometry.order_series_slices; explicit_preprojected_mm_adapter"
+GEOMETRY_REQUIREMENT = "valid_projected_coordinates_for_physical_span; otherwise_explicit_fallback"
 
 
 @dataclass(frozen=True)
@@ -33,16 +37,19 @@ class SliceSelectionConfig:
 
     def to_preprocessing_spec(self) -> dict[str, Any]:
         """Return the canonical JSON-compatible identity payload for DatasetVersion.preprocessing."""
-        return {"slice_selection": {
+        selection = {
             "strategy": self.strategy,
             "count": self.count,
             "short_series_policy": self.short_series_policy,
-            "physical_position_tolerance_mm": self.physical_position_tolerance_mm,
-            "allow_fallback": self.allow_fallback,
-            "fallback_policy": ("uniform" if self.allow_fallback else "error")
-                if self.strategy == "physical_span" else "not_applicable",
             "ordering_assumption": ORDERING_ASSUMPTION,
-        }}
+            "geometry_requirement": GEOMETRY_REQUIREMENT if self.strategy == "physical_span"
+                else "canonical_geometry_ordering_when_available",
+        }
+        if self.strategy == "physical_span":
+            selection.update(physical_position_tolerance_mm=self.physical_position_tolerance_mm,
+                allow_fallback=self.allow_fallback,
+                fallback_policy="uniform" if self.allow_fallback else "error")
+        return {"slice_selection": selection}
 
 
 @dataclass(frozen=True)
@@ -65,6 +72,9 @@ class SliceSelectionResult:
     series_uid: str | None = None
     ordering_assumption: str = ORDERING_ASSUMPTION
     parameters: Mapping[str, Any] = field(default_factory=dict)
+    configuration_id: str = ""
+    geometry_ordering_method: str | None = None
+    geometry_confidence: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"series_uid": self.series_uid, "strategy": self.strategy,
@@ -80,7 +90,9 @@ class SliceSelectionResult:
                 "last_selected_position": self.last_selected_position,
                 "mean_selected_spacing": self.mean_selected_spacing,
                 "warnings": list(self.warnings), "ordering_assumption": self.ordering_assumption,
-                "parameters": dict(self.parameters)}
+                "parameters": dict(self.parameters), "configuration_id": self.configuration_id,
+                "geometry_ordering_method": self.geometry_ordering_method,
+                "geometry_confidence": self.geometry_confidence}
 
 
 class SliceSelector:
@@ -93,27 +105,41 @@ class SliceSelector:
         uid = (series.get("series_instance_uid") if isinstance(series, Mapping)
                else getattr(series, "series_instance_uid", None))
         count = len(slices)
-        positions = tuple(_physical_position(item) for item in slices)
-        warnings = _collect_warnings(series, slices)
+        geometry_input = series.get("slices", slices) if isinstance(series, Mapping) else series
+        ordering = series if isinstance(series, OrderingResult) else order_series_slices(geometry_input)
+        warnings = _collect_warnings(None if isinstance(series, OrderingResult) else series, slices)
+        warnings.extend(warning.message for warning in ordering.warnings)
+        config_spec = self.config.to_preprocessing_spec()
+        config_id = digest(config_spec)
         if count == 0:
             return SliceSelectionResult((), self.config.count, 0, self.config.strategy,
                 None, 0, (), (), 0.0, None, None, None, None, None, tuple(warnings), uid,
-                parameters=self.config.to_preprocessing_spec()["slice_selection"])
+                parameters=config_spec["slice_selection"], configuration_id=config_id,
+                geometry_ordering_method=ordering.method, geometry_confidence=ordering.confidence)
 
-        # Position-backed ordering is stable for shuffled inputs; ties retain identity order.
-        complete_positions = all(value is not None for value in positions)
-        if complete_positions:
-            order = sorted(range(count), key=lambda i: (positions[i], _stable_key(slices[i])))
-        else:
-            order = list(range(count))
-            if self.config.strategy == "physical_span":
-                missing = sum(value is None for value in positions)
-                if not self.config.allow_fallback:
-                    raise ValueError("physical_span requires a physical position for every slice")
-                warnings.append(f"physical_span unavailable ({missing}/{count} positions missing); used uniform")
+        # Reuse geometry's validated ordering and coordinates. Explicit upstream
+        # millimeter coordinates remain an adapter for inputs without DICOM geometry.
+        source_indices: dict[int, deque[int]] = {}
+        for index, item in enumerate(slices):
+            source_indices.setdefault(id(item), deque()).append(index)
+        order = [source_indices[id(record)].popleft() for record in ordering.slices]
+        coordinates: dict[str, set[float]] = {}
+        for identifier, coordinate in ordering.diagnostics.slice_coordinates:
+            coordinates.setdefault(identifier, set()).add(coordinate)
+        ordered_positions = [_geometry_coordinate(slices[index], coordinates) for index in order]
+        explicit_positions = tuple(_preprojected_position(item) for item in slices)
+        if not coordinates:
+            if all(value is not None for value in explicit_positions):
+                order = sorted(range(count), key=lambda i: (explicit_positions[i], _stable_key(slices[i])))
+            ordered_positions = [explicit_positions[i] for i in order]
+        complete_positions = all(value is not None for value in ordered_positions)
+        if self.config.strategy == "physical_span" and not complete_positions:
+            missing = sum(value is None for value in ordered_positions)
+            if not self.config.allow_fallback:
+                raise ValueError("physical_span requires valid projected physical coordinates for every slice")
+            warnings.append(f"physical_span unavailable ({missing}/{count} positions missing); used uniform")
 
         ordered = [slices[i] for i in order]
-        ordered_positions = [positions[i] for i in order]
         strategy = self.config.strategy
         fallback = None
         if strategy == "physical_span" and not complete_positions:
@@ -135,7 +161,7 @@ class SliceSelector:
         pad_count = (wanted - len(chosen) if count < wanted
                      and self.config.short_series_policy == "pad_reference" else 0)
 
-        parameters = self.config.to_preprocessing_spec()["slice_selection"]
+        parameters = dict(config_spec["slice_selection"])
         if self.config.strategy == "center":
             parameters.update(start_index=chosen[0], end_index=chosen[-1] + 1,
                               center_index=(chosen[0] + chosen[-1]) / 2)
@@ -145,12 +171,12 @@ class SliceSelector:
         selected_positions = tuple(ordered_positions[i] for i in chosen) + (None,) * pad_count
         finite_positions = list(ordered_positions) if complete_positions else []
         source_span = max(finite_positions) - min(finite_positions) if len(finite_positions) > 1 else 0.0 if finite_positions else None
-        chosen_finite = list(selected_positions) if complete_positions else []
+        chosen_finite = [value for value in selected_positions if value is not None] if complete_positions else []
         selected_span = max(chosen_finite) - min(chosen_finite) if len(chosen_finite) > 1 else 0.0 if chosen_finite else None
         if source_span is not None and source_span > 0 and selected_span is not None:
             coverage = min(1.0, selected_span / source_span)
         elif count > 1:
-            observed_indices = [i for i in selected_indices if i is not None]
+            observed_indices = chosen
             coverage = ((max(observed_indices) - min(observed_indices)) / (count - 1)
                         if observed_indices else 0.0)
         else:
@@ -168,7 +194,8 @@ class SliceSelector:
         return SliceSelectionResult(selected, wanted, len(selected), strategy, fallback, count,
             selected_indices, selected_positions, coverage, source_span, selected_span,
             first, last, mean_spacing, tuple(warnings), uid,
-            parameters=parameters)
+            parameters=parameters, configuration_id=config_id,
+            geometry_ordering_method=ordering.method, geometry_confidence=ordering.confidence)
 
 
 def select_slices(slices: Sequence[Any], *, strategy: str = "uniform", count: int = 24,
@@ -264,7 +291,8 @@ def _position_groups(positions: Sequence[float | None], tolerance_mm: float) -> 
     return groups
 
 
-def _physical_position(item: Any) -> float | None:
+def _preprojected_position(item: Any) -> float | None:
+    """Read an upstream physical coordinate; never derive one from DICOM vectors here."""
     metadata = _metadata(item)
     direct = metadata.get("physical_position_mm", metadata.get("position_mm"))
     if direct is not None:
@@ -273,26 +301,17 @@ def _physical_position(item: Any) -> float | None:
             return value if math.isfinite(value) else None
         except (TypeError, ValueError):
             return None
-    position = metadata.get("ImagePositionPatient")
-    if not isinstance(position, (list, tuple)) or len(position) != 3:
-        return None
-    try:
-        xyz = [float(v) for v in position]
-        if not all(math.isfinite(v) for v in xyz):
-            return None
-        orientation = metadata.get("ImageOrientationPatient")
-        if not isinstance(orientation, (list, tuple)) or len(orientation) != 6:
-            return None
-        row, col = [float(v) for v in orientation[:3]], [float(v) for v in orientation[3:]]
-        if not all(math.isfinite(v) for v in (*row, *col)):
-            return None
-        normal = (row[1]*col[2]-row[2]*col[1], row[2]*col[0]-row[0]*col[2], row[0]*col[1]-row[1]*col[0])
-        norm = math.sqrt(sum(v*v for v in normal))
-        if norm == 0 or not math.isfinite(norm):
-            return None
-        return sum(a*b for a, b in zip(xyz, normal)) / norm
-    except (TypeError, ValueError, OverflowError):
-        return None
+    return None
+
+
+def _geometry_coordinate(item: Any, coordinates: Mapping[str, set[float]]) -> float | None:
+    # Match geometry's coordinate identifiers for records and metadata mappings.
+    metadata = _metadata(item)
+    identifier = str(getattr(item, "slice_id", "") or getattr(item, "relative_path", "") or
+                     metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
+    values = coordinates.get(identifier, set())
+    # Duplicate identifiers with distinct positions cannot be safely attributed.
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def _metadata(item: Any) -> Mapping[str, Any]:
@@ -332,6 +351,6 @@ def _selection_reference(item: Any) -> dict[str, str | None] | None:
         return None
     metadata = _metadata(item)
     path = item.get("relative_path") if isinstance(item, Mapping) else getattr(item, "relative_path", None)
-    slice_id = getattr(item, "slice_id", None)
+    slice_id = item.get("slice_id") if isinstance(item, Mapping) else getattr(item, "slice_id", None)
     return {"sop_instance_uid": metadata.get("SOPInstanceUID"),
             "slice_id": slice_id, "relative_path": path}
