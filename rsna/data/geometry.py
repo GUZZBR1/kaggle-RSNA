@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
+import json
 import math
 from statistics import median, pstdev
 from typing import Any, Iterable, Mapping, Sequence
@@ -72,7 +74,7 @@ class GeometryConfig:
     duplicate_position_tolerance_mm: float = 1e-3
     spacing_outlier_factor: float = 2.0
     strict_geometry: bool = False
-    duplicate_policy: str = "warn_keep_all"
+    duplicate_policy: str = "warn"
 
     def __post_init__(self) -> None:
         if not 0 <= self.orientation_tolerance_deg < 90:
@@ -81,7 +83,7 @@ class GeometryConfig:
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
-        if self.duplicate_policy not in {"warn_keep_all", "keep_all", "deduplicate_exact", "strict"}:
+        if self.duplicate_policy not in {"warn", "keep_all", "deduplicate_exact", "strict"}:
             raise ValueError("unsupported duplicate_policy")
 
 
@@ -112,6 +114,7 @@ class SeriesGeometry:
     spacing_std: float | None
     orientation_consistency: Mapping[str, Any]
     duplicate_positions: tuple[float, ...]
+    spacing_metadata: Mapping[str, Any]
     warnings: tuple[GeometryWarning, ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -125,6 +128,7 @@ class SeriesGeometry:
                 "spacing_std": self.spacing_std,
                 "orientation_consistency": dict(self.orientation_consistency),
                 "duplicate_positions": list(self.duplicate_positions),
+                "spacing_metadata": dict(self.spacing_metadata),
                 "warnings": [warning.to_dict() for warning in self.warnings]}
 
 
@@ -162,14 +166,54 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
     warnings: list[GeometryWarning] = []
     if not slices:
         empty = SeriesGeometry(None, "stable_fallback", 0, None, None, None, (), None,
-                               None, None, None, {"consistent": None, "max_deviation_deg": None}, (), ())
+                               None, None, None, {"consistent": None, "max_deviation_deg": None}, (),
+                               {"slice_thickness_mm": [], "spacing_between_slices_mm": [],
+                                "pixel_spacing_mm": []}, ())
         return OrderingResult((), "stable_fallback", "low", False, (), empty, series_uid)
 
     metadata = [_metadata(item) for item in slices]
+    spacing_metadata: dict[str, list[Any]] = {
+        "slice_thickness_mm": [], "spacing_between_slices_mm": [], "pixel_spacing_mm": []}
     positions: list[Vector3 | None] = []
     orientations: list[tuple[Vector3, Vector3] | None] = []
     ids = [_slice_id(item) for item in slices]
     for item_id, values in zip(ids, metadata):
+        for tag, output_key in (("SliceThickness", "slice_thickness_mm"),
+                                ("SpacingBetweenSlices", "spacing_between_slices_mm")):
+            raw = values.get(tag)
+            measure = _finite_scalar(raw)
+            invalid_measure = measure is None or (tag == "SliceThickness" and measure <= 0) or (
+                tag == "SpacingBetweenSlices" and measure == 0)
+            if raw is not None and invalid_measure:
+                warnings.append(GeometryWarning("invalid_spacing_metadata",
+                    f"{tag} must be a finite nonzero measurement (and positive for SliceThickness)",
+                    (item_id,), {"value": str(raw)}))
+            elif tag == "SpacingBetweenSlices" and measure is not None and measure < 0:
+                warnings.append(GeometryWarning("signed_spacing_between_slices",
+                    "negative SpacingBetweenSlices is retained; its meaning may be IOD-specific",
+                    (item_id,), {"value_mm": measure}))
+            spacing_metadata[output_key].append(measure)
+        raw_pixel_spacing = values.get("PixelSpacing")
+        if raw_pixel_spacing is None:
+            spacing_metadata["pixel_spacing_mm"].append(None)
+        else:
+            try:
+                pixel_spacing = _numbers(raw_pixel_spacing, 2, "PixelSpacing")
+                rows = _finite_scalar(values.get("Rows"))
+                columns = _finite_scalar(values.get("Columns"))
+                invalid_pixel_spacing = (pixel_spacing[0] < 0 or pixel_spacing[1] < 0 or
+                    (pixel_spacing[0] == 0 and rows != 1) or
+                    (pixel_spacing[1] == 0 and columns != 1))
+                spacing_metadata["pixel_spacing_mm"].append(list(pixel_spacing))
+                if invalid_pixel_spacing:
+                    warnings.append(GeometryWarning("invalid_spacing_metadata",
+                        "PixelSpacing values must be positive except for a single row or column",
+                        (item_id,), {"values_mm": list(pixel_spacing), "rows": rows,
+                                     "columns": columns}))
+            except ValueError as exc:
+                spacing_metadata["pixel_spacing_mm"].append(None)
+                warnings.append(GeometryWarning("invalid_spacing_metadata", str(exc), (item_id,),
+                                                {"value": str(raw_pixel_spacing)}))
         try:
             positions.append(parse_position(values.get("ImagePositionPatient"))
                              if values.get("ImagePositionPatient") is not None else None)
@@ -182,6 +226,23 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
         except ValueError as exc:
             orientations.append(None)
             warnings.append(GeometryWarning("invalid_orientation", str(exc), (item_id,)))
+
+    uids_by_value: dict[str, list[str]] = defaultdict(list)
+    for item_id, values in zip(ids, metadata):
+        uid = values.get("SOPInstanceUID")
+        if uid is not None and str(uid).strip():
+            uids_by_value[str(uid).strip()].append(item_id)
+    duplicate_uids = {uid: occurrences for uid, occurrences in uids_by_value.items()
+                      if len(occurrences) > 1}
+    if duplicate_uids:
+        duplicate_ids = tuple(item_id for occurrences in duplicate_uids.values()
+                              for item_id in occurrences)
+        if config.duplicate_policy == "strict" or config.strict_geometry:
+            raise ValueError("duplicate SOPInstanceUID values in strict mode")
+        if config.duplicate_policy != "keep_all":
+            warnings.append(GeometryWarning("duplicate_sop_instance_uid",
+                "multiple slice records share a SOPInstanceUID",
+                duplicate_ids, {"uids": duplicate_uids}))
 
     normals: list[Vector3 | None] = []
     for item_id, orientation in zip(ids, orientations):
@@ -208,22 +269,24 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
             {"max_deviation_deg": max_deviation,
              "tolerance_deg": config.orientation_tolerance_deg}))
     if config.strict_geometry and any(w.code in {"invalid_position", "invalid_orientation",
-            "degenerate_orientation", "inconsistent_orientation"} for w in warnings):
+            "invalid_spacing_metadata", "degenerate_orientation", "inconsistent_orientation"}
+            for w in warnings):
         raise ValueError("invalid or inconsistent DICOM geometry in strict mode")
 
+    stable_ties = [_metadata_tie_key(values) for values in metadata]
     keys: list[Any]
     coords: list[float] | None = None
     if all(p is not None for p in positions) and all(n is not None for n in normals) and orientation_consistent:
         normal = _mean_normal(valid_normals)
         coords = [project_position(p, normal) for p in positions if p is not None]
         method, confidence = "geometry", "high"
-        keys = list(zip(coords, ids))
+        keys = list(zip(coords, ids, stable_ties))
     elif all(p is not None for p in positions) and ref_normal is not None and orientation_consistent:
         normal = _mean_normal(valid_normals)
         coords = [project_position(p, normal) for p in positions if p is not None]
         method, confidence = "position_inferred_normal", "medium"
         warnings.append(GeometryWarning("inferred_normal", "normal inferred from orientations available elsewhere in the series"))
-        keys = list(zip(coords, ids))
+        keys = list(zip(coords, ids, stable_ties))
     else:
         normal = ref_normal
         keys = []
@@ -235,18 +298,18 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
         if all(v is not None for v in location_values):
             spread = max(location_values) - min(location_values)  # type: ignore[arg-type]
             if spread > config.position_tolerance_mm:
-                keys = list(zip(location_values, ids))
+                keys = list(zip(location_values, ids, stable_ties))
                 method, confidence = "slice_location", "medium"
                 warnings.append(GeometryWarning("fallback_slice_location", "ordering uses SliceLocation because full geometry was unavailable"))
         if not keys:
             instance_values = [_finite_scalar(item.get("InstanceNumber")) for item in metadata]
             if all(v is not None for v in instance_values):
-                keys = list(zip(instance_values, ids))
+                keys = list(zip(instance_values, ids, stable_ties))
                 method, confidence = "instance_number", "low"
                 warnings.append(GeometryWarning("fallback_instance_number", "ordering uses InstanceNumber because spatial coordinates were unavailable"))
             else:
                 stable_values = [_stable_identifier(item, values) for item, values in zip(slices, metadata)]
-                keys = list(zip(stable_values, ids))
+                keys = list(zip(stable_values, ids, stable_ties))
                 method, confidence = "stable_fallback", "low"
                 warnings.append(GeometryWarning("fallback_stable_identifier", "ordering uses SOPInstanceUID or relative path"))
 
@@ -254,6 +317,7 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
     ordered = tuple(slices[i] for i in order)
     sorted_coords = sorted(coords) if coords is not None else None
     duplicate_positions: list[float] = []
+    zero_spacing_intervals: list[float] = []
     spacings: list[float] = []
     duplicate_slice_ids: list[str] = []
     if sorted_coords is not None:
@@ -261,6 +325,8 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
             delta = right - left
             if delta > config.duplicate_position_tolerance_mm:
                 spacings.append(delta)
+            else:
+                zero_spacing_intervals.append(delta)
         coordinate_order = sorted(range(len(coords)), key=lambda i: (coords[i], ids[i]))
         group: list[int] = []
         group_anchor: float | None = None
@@ -285,7 +351,13 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
                 {"positions_mm": duplicate_positions, "policy": policy})
             if policy == "strict" or config.strict_geometry:
                 raise ValueError("duplicate slice positions in strict mode")
-            warnings.append(duplicate_warning)
+            if policy != "keep_all":
+                warnings.append(duplicate_warning)
+            if zero_spacing_intervals and policy != "keep_all":
+                warnings.append(GeometryWarning("zero_spacing",
+                    "adjacent projected slice coordinates are coincident within tolerance",
+                    tuple(duplicate_slice_ids), {"intervals_mm": zero_spacing_intervals,
+                                                  "tolerance_mm": config.duplicate_position_tolerance_mm}))
             if policy == "deduplicate_exact":
                 keep = []
                 last = None
@@ -312,7 +384,7 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
         max(spacings) if spacings else None, pstdev(spacings) if spacings else None,
         {"consistent": orientation_consistent if valid_normals else None,
          "max_deviation_deg": max_deviation, "tolerance_deg": config.orientation_tolerance_deg},
-        tuple(duplicate_positions), geometry_warnings)
+        tuple(duplicate_positions), spacing_metadata, geometry_warnings)
     return OrderingResult(ordered, method, confidence, False, geometry_warnings, diag, series_uid)
 
 
@@ -323,17 +395,23 @@ def _metadata(item: Any) -> Mapping[str, Any]:
 
 
 def _slice_id(item: Any) -> str:
-    return str(getattr(item, "slice_id", "") or _metadata(item).get("SOPInstanceUID") or
-               _metadata(item).get("relative_path") or "")
+    metadata = _metadata(item)
+    return str(getattr(item, "slice_id", "") or getattr(item, "relative_path", "") or
+               metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
 
 
 def _stable_identifier(item: Any, metadata: Mapping[str, Any]) -> str:
-    return str(metadata.get("SOPInstanceUID") or getattr(item, "relative_path", "") or
-               metadata.get("relative_path") or _slice_id(item))
+    return str(getattr(item, "relative_path", "") or metadata.get("relative_path") or
+               metadata.get("SOPInstanceUID") or _slice_id(item))
+
+
+def _metadata_tie_key(metadata: Mapping[str, Any]) -> str:
+    """Stable final tie-breaker when upstream identifiers are duplicated."""
+    return json.dumps(metadata, sort_keys=True, separators=(",", ":"), default=str)
 
 
 def _finite_scalar(value: Any) -> float | None:
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
     try:
         scalar = float(value)

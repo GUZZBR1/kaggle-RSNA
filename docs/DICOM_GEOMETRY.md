@@ -31,19 +31,26 @@ combined with instance or filename keys:
 
 `SliceLocation` is only a fallback. Invalid or inconsistent orientation prevents
 geometry ordering; ordinary mode reports a structured warning and tries a lower
-tier, while `strict_geometry=True` raises. Duplicate physical positions are
-retained and warned by default. `duplicate_policy="deduplicate_exact"` opts in to
-collapsing positions within the configured tolerance; `"strict"` raises.
+tier, while `strict_geometry=True` raises. Duplicate positions and repeated SOP UIDs
+are diagnosed. The default `duplicate_policy="warn"` retains records and warns;
+`"keep_all"` retains without duplicate warnings, `"deduplicate_exact"` collapses
+coincident positions within tolerance, and `"strict"` raises. Repeated SOP UIDs at
+different positions are never collapsed automatically.
 
 ## Diagnostics and tolerances
 
 `GeometryConfig` centralizes angular tolerance, position and duplicate tolerances,
 spacing outlier factor, strictness, and duplicate policy. `SeriesGeometry` reports
-normal, coordinate range/span, spacing statistics, orientation consistency,
-duplicate positions, and warnings. `OrderingResult.to_dict()` emits plain JSON-safe
-containers suitable for provenance logs.
+normal, per-slice projected coordinates, coordinate range/span, measured spacing
+statistics, source `SliceThickness` / `SpacingBetweenSlices` / `PixelSpacing`,
+orientation consistency, duplicate positions, and warnings. Source thickness is
+reported independently and never substituted for measured spacing. `OrderingResult.to_dict()`
+emits plain JSON-safe containers suitable for provenance logs.
 
 `SliceThickness` and `SpacingBetweenSlices` are retained as source metadata, but
 are not substituted for measured distances between adjacent projected positions.
-Spacing statistics ignore coincident positions. No orientation canonicalization,
-laterality flip, pixel decoding, or slice selection is performed here.
+Negative `SpacingBetweenSlices` is preserved with a warning because signed use may be
+IOD-specific. `PixelSpacing` values are reported independently; a zero value is accepted
+only for a corresponding single-row or single-column image. Spacing statistics ignore
+coincident positions. No orientation canonicalization, laterality flip, pixel decoding,
+or slice selection is performed here.

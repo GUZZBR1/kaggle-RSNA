@@ -95,11 +95,64 @@ class DicomGeometryTests(unittest.TestCase):
         self.assertEqual("position_inferred_normal", result.method)
         self.assertEqual([0, 1, 2], [x.metadata["ImagePositionPatient"][2] for x in result.slices])
 
+    def test_duplicate_sop_uid_is_warned_and_ties_are_deterministic(self):
+        left = TestSlice("a.dcm", {"SOPInstanceUID": "duplicate", "ImagePositionPatient": (0, 0, 1),
+                                   "ImageOrientationPatient": AXIAL}, "a.dcm")
+        right = TestSlice("b.dcm", {"SOPInstanceUID": "duplicate", "ImagePositionPatient": (0, 0, 1),
+                                    "ImageOrientationPatient": AXIAL}, "b.dcm")
+        result = self.order([right, left])
+        codes = {warning.code for warning in result.warnings}
+        self.assertIn("duplicate_sop_instance_uid", codes)
+        self.assertIn("duplicate_positions", codes)
+        self.assertEqual(["a.dcm", "b.dcm"], [item.slice_id for item in result.slices])
+        self.assertEqual([item.slice_id for item in result.slices],
+                         [item.slice_id for item in self.order([left, right]).slices])
+        with self.assertRaises(ValueError):
+            self.order([left, right], GeometryConfig(duplicate_policy="strict"))
+
+    def test_duplicate_policies_and_non_geometry_spacing_metadata(self):
+        values = [slice_at(0, instance=1), slice_at(0, instance=2)]
+        values[0].metadata.update({"SliceThickness": "2.5", "SpacingBetweenSlices": "3",
+                                   "PixelSpacing": "0.4\\0.6"})
+        keep = self.order(values, GeometryConfig(duplicate_policy="keep_all"))
+        self.assertEqual(2, len(keep.slices))
+        self.assertNotIn("duplicate_positions", {warning.code for warning in keep.warnings})
+        self.assertNotIn("zero_spacing", {warning.code for warning in keep.warnings})
+        self.assertEqual([2.5, None], keep.diagnostics.to_dict()["spacing_metadata"]["slice_thickness_mm"])
+        self.assertEqual([0.4, 0.6], keep.diagnostics.to_dict()["spacing_metadata"]["pixel_spacing_mm"][0])
+        warn = self.order(values)
+        self.assertIn("zero_spacing", {warning.code for warning in warn.warnings})
+        values[0].metadata["PixelSpacing"] = "0\\-1"
+        invalid = self.order(values)
+        self.assertIn("invalid_spacing_metadata", {warning.code for warning in invalid.warnings})
+
+    def test_spacing_metadata_is_reported_without_driving_slice_distance(self):
+        item = slice_at(0)
+        item.metadata.update({"SliceThickness": "4", "SpacingBetweenSlices": "-3",
+                              "PixelSpacing": "0\\0.6", "Rows": 1, "Columns": 256})
+        result = self.order([item])
+        summary = result.diagnostics.to_dict()["spacing_metadata"]
+        self.assertEqual([4.0], summary["slice_thickness_mm"])
+        self.assertEqual([-3.0], summary["spacing_between_slices_mm"])
+        self.assertEqual([0.0, 0.6], summary["pixel_spacing_mm"][0])
+        self.assertIn("signed_spacing_between_slices", {warning.code for warning in result.warnings})
+        self.assertEqual(None, result.diagnostics.median_spacing)
+
+    def test_stable_fallback_uses_relative_path_without_uid(self):
+        first = TestSlice("z.dcm", {}, "")
+        second = TestSlice("a.dcm", {}, "")
+        result = self.order([first, second])
+        self.assertEqual("stable_fallback", result.method)
+        self.assertEqual(["a.dcm", "z.dcm"], [item.relative_path for item in result.slices])
+
     def test_slice_location_instance_number_and_stable_fallbacks(self):
         self.assertEqual("slice_location", self.order([
             slice_at(None, instance=2, location=2), slice_at(None, instance=1, location=1)]).method)
-        self.assertEqual("instance_number", self.order([
-            slice_at(None, instance=2), slice_at(None, instance=1)]).method)
+        instance_values = [slice_at(None, instance=2), slice_at(None, instance=1)]
+        instance_result = self.order(instance_values)
+        self.assertEqual("instance_number", instance_result.method)
+        self.assertEqual([item.slice_id for item in instance_result.slices],
+                         [item.slice_id for item in self.order(list(reversed(instance_values))).slices])
         result = self.order([slice_at(None, uid="b"), slice_at(None, uid="a")])
         self.assertEqual("stable_fallback", result.method)
         self.assertEqual(["a", "b"], [s.metadata["SOPInstanceUID"] for s in result.slices])
