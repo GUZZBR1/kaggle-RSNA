@@ -11,6 +11,7 @@ from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, generate_uid
 from rsna import DatasetVersion
 from rsna.data import discover_dataset, load_manifest, read_dicom_metadata, save_manifest
 from rsna.identity import digest
+from rsna.targets import TARGET_REGISTRY_ID
 
 
 def write_dicom(path, *, study="1.2.10", series="1.2.20", sop=None, patient="P1", missing=()):
@@ -128,15 +129,19 @@ class DatasetIndexTests(unittest.TestCase):
             self.assertEqual(first_bytes, path.read_bytes())
 
     def test_dataset_version_optional_artifact_binding_preserves_legacy_identity(self):
-        legacy = DatasetVersion("d", "v1", "a" * 64, "none", ("normal",))
+        legacy = DatasetVersion("d", "v1", "a" * 64, "none", ("normal",), synthetic=True)
         bound = DatasetVersion("d", "v1", "a" * 64, "none", ("normal",),
-                               dataset_index_artifact_id="b" * 64)
+                               dataset_index_artifact_id="b" * 64, synthetic=True)
         self.assertEqual(64, len(bound.dataset_version_id))
         self.assertNotEqual(legacy.dataset_version_id, bound.dataset_version_id)
+        self.assertEqual(bound.dataset_version_id,
+                         DatasetVersion.from_dict(bound.to_dict()).dataset_version_id)
         legacy_payload = {"schema_version": legacy.schema_version, "name": legacy.name,
             "version": legacy.version, "source_manifest_sha256": legacy.source_manifest_sha256,
             "preprocessing_version": legacy.preprocessing_version,
-            "preprocessing": legacy.preprocessing, "class_names": legacy.class_names}
+            "preprocessing": legacy.preprocessing, "class_names": legacy.class_names,
+            "synthetic": legacy.synthetic, "target_schema_version": legacy.target_schema_version,
+            "target_registry_id": TARGET_REGISTRY_ID}
         self.assertEqual(digest(legacy_payload), legacy.dataset_version_id)
 
 

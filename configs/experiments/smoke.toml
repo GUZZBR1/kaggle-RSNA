@@ -4,6 +4,7 @@ version = "synthetic-1"
 source_manifest_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 preprocessing_version = "placeholder-1"
 class_names = ["class_01", "class_02", "class_03", "class_04", "class_05", "class_06", "class_07", "class_08", "class_09", "class_10", "class_11", "class_12"]
+synthetic = true
 uri = "mock://datasets/rsna-knee-mri"
 
 [dataset.preprocessing]
@@ -25,6 +26,7 @@ training_configuration = { smoke = true }
 
 [experiment]
 name = "smoke"
+synthetic = true
 fold_ids = ["fold_0"]
 class_names = ["class_01", "class_02", "class_03", "class_04", "class_05", "class_06", "class_07", "class_08", "class_09", "class_10", "class_11", "class_12"]
 resources = { cpus = 1, gpus = 0 }
