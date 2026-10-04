@@ -141,11 +141,27 @@ class OrderingResult:
     warnings: tuple[GeometryWarning, ...]
     diagnostics: SeriesGeometry
     series_instance_uid: str | None = None
+    source_slice_count: int = 0
+    source_indices: tuple[int, ...] = ()
+    ordered_positions_mm: tuple[float | None, ...] = ()
+    config: GeometryConfig = field(default_factory=GeometryConfig)
+    study_instance_uid: str | None = None
+    series_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {"slice_ids": [getattr(item, "slice_id", None) for item in self.slices],
                 "method": self.method, "confidence": self.confidence,
                 "reversed": self.reversed, "series_instance_uid": self.series_instance_uid,
+                "study_instance_uid": self.study_instance_uid, "series_id": self.series_id,
+                "source_slice_count": self.source_slice_count,
+                "source_indices": list(self.source_indices),
+                "ordered_positions_mm": list(self.ordered_positions_mm),
+                "geometry_config": {"orientation_tolerance_deg": self.config.orientation_tolerance_deg,
+                    "position_tolerance_mm": self.config.position_tolerance_mm,
+                    "duplicate_position_tolerance_mm": self.config.duplicate_position_tolerance_mm,
+                    "spacing_outlier_factor": self.config.spacing_outlier_factor,
+                    "strict_geometry": self.config.strict_geometry,
+                    "duplicate_policy": self.config.duplicate_policy},
                 "warnings": [warning.to_dict() for warning in self.warnings],
                 "diagnostics": self.diagnostics.to_dict()}
 
@@ -160,16 +176,21 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
     if hasattr(series, "slices"):
         slices = tuple(series.slices)
         series_uid = getattr(series, "series_instance_uid", None)
+        study_uid = getattr(series, "study_instance_uid", None)
+        series_id = getattr(series, "series_id", None)
     else:
         slices = tuple(series)
         series_uid = None
+        study_uid = None
+        series_id = None
     warnings: list[GeometryWarning] = []
     if not slices:
         empty = SeriesGeometry(None, "stable_fallback", 0, None, None, None, (), None,
                                None, None, None, {"consistent": None, "max_deviation_deg": None}, (),
                                {"slice_thickness_mm": [], "spacing_between_slices_mm": [],
                                 "pixel_spacing_mm": []}, ())
-        return OrderingResult((), "stable_fallback", "low", False, (), empty, series_uid)
+        return OrderingResult((), "stable_fallback", "low", False, (), empty, series_uid,
+                             0, (), (), config, study_uid, series_id)
 
     metadata = [_metadata(item) for item in slices]
     spacing_metadata: dict[str, list[Any]] = {
@@ -366,7 +387,8 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
                     if last is None or abs(value - last) > config.duplicate_position_tolerance_mm:
                         keep.append(idx)
                         last = value
-                ordered = tuple(slices[i] for i in keep)
+                order = keep
+                ordered = tuple(slices[i] for i in order)
     if len(spacings) > 1:
         typical = median(spacings)
         irregular = min(spacings) < typical / config.spacing_outlier_factor or max(spacings) > typical * config.spacing_outlier_factor
@@ -386,8 +408,11 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
          "max_deviation_deg": max_deviation, "tolerance_deg": config.orientation_tolerance_deg},
         tuple(duplicate_positions), spacing_metadata, geometry_warnings)
     reversed_input = len(order) > 1 and order == list(range(len(slices) - 1, -1, -1))
+    ordered_positions = (tuple(coords[i] for i in order) if coords is not None
+                         else (None,) * len(order))
     return OrderingResult(ordered, method, confidence, reversed_input,
-                          geometry_warnings, diag, series_uid)
+                          geometry_warnings, diag, series_uid, len(slices), tuple(order),
+                          ordered_positions, config, study_uid, series_id)
 
 
 def _metadata(item: Any) -> Mapping[str, Any]:

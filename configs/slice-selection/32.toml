@@ -2,5 +2,4 @@
 strategy = "uniform"
 count = 32
 short_series_policy = "keep_all"
-physical_position_tolerance_mm = 0.001
 allow_fallback = true
