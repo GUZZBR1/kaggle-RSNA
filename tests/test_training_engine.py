@@ -8,6 +8,7 @@ except ImportError:
     torch = None
 
 from rsna.training.smoke import build_engine, make_smoke_job, run_training_smoke
+from rsna.training.engine import FoldData
 from rsna.providers.local import LocalProvider
 
 
@@ -27,10 +28,21 @@ class TrainingEngineTests(unittest.TestCase):
             self.assertEqual("succeeded", resumed.status)
             expected = torch.load(baseline.checkpoint.artifact.uri, map_location="cpu", weights_only=False)
             actual = torch.load(resumed.checkpoint.artifact.uri, map_location="cpu", weights_only=False)
+            stopped = torch.load(interrupted.checkpoint.artifact.uri, map_location="cpu", weights_only=False)
             for name, value in expected["model_state"].items():
                 self.assertTrue(torch.equal(value, actual["model_state"][name]), name)
             self.assertEqual(baseline.metrics["train_loss"], resumed.metrics["train_loss"])
             self.assertEqual(baseline.metrics["validation_loss"], resumed.metrics["validation_loss"])
+            baseline_steps = baseline.provenance["step_timings_seconds"]
+            resumed_steps = resumed.provenance["step_timings_seconds"]
+            self.assertGreater(len(baseline_steps), 0)
+            self.assertEqual(len(baseline_steps), len(resumed_steps))
+            self.assertTrue(all(step > 0 for step in resumed_steps))
+            self.assertGreater(resumed.metrics["step_time_mean_seconds"], 0)
+            self.assertGreaterEqual(resumed.metrics["training_seconds"],
+                                    stopped["progress"]["elapsed_seconds"])
+            self.assertEqual(job.fold_plan_id, resumed.provenance["fold_plan_id"])
+            self.assertEqual(job.dataset_version_id, resumed.provenance["dataset_version_id"])
 
     def test_local_provider_accepts_canonical_engine_result(self):
         dataset, candidate, job, loader = make_smoke_job()
@@ -70,6 +82,26 @@ class TrainingEngineTests(unittest.TestCase):
             result = build_engine(dataset, candidate, invalid, loader, Path(root)).run(invalid)
         self.assertEqual("failed", result.status)
         self.assertIn("LeakageGuard", result.failure or "")
+
+    def test_nonfinite_training_state_returns_structured_failure(self):
+        dataset, candidate, job, loader = make_smoke_job()
+
+        def nonfinite_loader(training_job, train_ids, validation_ids):
+            data = loader(training_job, train_ids, validation_ids)
+            inputs, targets, masks = data.train.tensors
+            corrupted_inputs = inputs.clone()
+            corrupted_inputs[0, 0] = float("nan")
+            train = torch.utils.data.TensorDataset(corrupted_inputs, targets, masks)
+            return FoldData(train, data.validation, data.train_study_ids,
+                            data.validation_study_ids, data.provenance)
+
+        with tempfile.TemporaryDirectory() as root:
+            result = build_engine(dataset, candidate, job, nonfinite_loader, Path(root)).run(job)
+        self.assertEqual("failed", result.status)
+        self.assertIn("non-finite masked BCE loss", result.failure or "")
+        self.assertEqual("NONFINITE_TRAINING_STATE", result.provenance["failure_state"]["code"])
+        self.assertEqual(result.checkpoint is not None,
+                         result.provenance["failure_state"]["recoverable"])
 
 
 if __name__ == "__main__":
