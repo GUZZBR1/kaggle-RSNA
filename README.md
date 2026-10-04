@@ -2,8 +2,9 @@
 
 Architecture foundation for the **RSNA Knee Abnormality Detection** MRI classification
 competition. It defines reproducible dataset, fold-plan, model-candidate, training,
-prediction, evaluation, and submission-artifact contracts. It does not include a model,
-DICOM pipeline, real fold assignment, or final Kaggle notebook.
+prediction, evaluation, and submission-artifact contracts, and includes a metadata-only
+synthetic data smoke. It does not implement or train a neural model or provide a final
+Kaggle notebook.
 
 ## Quick start
 
@@ -12,6 +13,7 @@ Python 3.11 or newer; DICOM metadata indexing uses `pydicom`.
 ```bash
 python -m unittest discover -s tests -v
 python -m rsna configs/experiments/smoke.toml
+python -m rsna synthetic smoke
 ```
 
 The CLI uses an explicitly synthetic mock provider and synthetic target names. Its
@@ -32,3 +34,6 @@ python -m rsna data-index --input /data/rsna --output artifacts/dataset-index
 
 See [dataset indexing](docs/DATA_INDEX.md) for discovery rules, manifest loading, and
 the `DatasetVersion` binding.
+
+Run `python -m rsna synthetic smoke --keep` to retain generated DICOMs and audit artifacts.
+See [synthetic smoke documentation](docs/SYNTHETIC_SMOKE.md).

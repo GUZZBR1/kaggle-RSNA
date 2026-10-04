@@ -34,6 +34,10 @@ def run_config(path: str | Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     import sys
     argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) >= 2 and argv[:2] == ["synthetic", "smoke"]:
+        return _synthetic_smoke_cli(argv[2:])
+    if argv and argv[0] == "select-slices":
+        return _select_slices_cli(argv[1:])
     if argv and argv[0] == "data-index":
         return _data_index(argv[1:])
     parser = argparse.ArgumentParser(prog="kaggle-rsna")
@@ -79,4 +83,46 @@ def _data_index(argv: list[str]) -> int:
     print(f"Dataset index ID: {index.index_id}")
     for warning in result.report.warnings:
         print(f"Warning: {warning}")
+    return 0
+
+
+def _synthetic_smoke_cli(argv: list[str]) -> int:
+    import tempfile
+    parser = argparse.ArgumentParser(prog="kaggle-rsna synthetic smoke")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--inject", choices=("patient-leakage", "duplicate-sop",
+        "orientation-conflict", "missing-position", "missing-metadata", "spacing-irregular",
+        "corrupted-cache"))
+    parser.add_argument("--keep", nargs="?", const="synthetic-smoke", metavar="DIR",
+                        help="keep generated DICOMs and reports in DIR (default: ./synthetic-smoke)")
+    args = parser.parse_args(argv)
+    from .data.smoke import run_data_smoke
+    if args.keep:
+        result = run_data_smoke(Path(args.keep), seed=args.seed, injection=args.inject)
+    else:
+        with tempfile.TemporaryDirectory(prefix="rsna-synthetic-smoke-") as temp:
+            result = run_data_smoke(temp, seed=args.seed, injection=args.inject)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def _select_slices_cli(argv: list[str]) -> int:
+    from .data.selection import SliceSelectionConfig, SliceSelector
+    parser = argparse.ArgumentParser(prog="kaggle-rsna select-slices")
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--strategy", choices=("uniform", "center", "physical_span"), default="uniform")
+    parser.add_argument("--count", required=True, type=int)
+    parser.add_argument("--short-series-policy", choices=("keep_all", "repeat_nearest",
+        "pad_reference", "strict"), default="keep_all")
+    parser.add_argument("--physical-position-tolerance-mm", type=float, default=1e-3)
+    parser.add_argument("--no-fallback", action="store_true")
+    args = parser.parse_args(argv)
+    data = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    config = SliceSelectionConfig(args.strategy, args.count, args.short_series_policy,
+                                  args.physical_position_tolerance_mm, not args.no_fallback)
+    selector = SliceSelector(config)
+    selections = [selector.select(series).to_dict()
+        for study in data.get("studies", []) for series in study.get("series", [])]
+    print(json.dumps({"series_count": len(selections), "selections": selections},
+                     indent=2, sort_keys=True))
     return 0

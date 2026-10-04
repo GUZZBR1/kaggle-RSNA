@@ -2,6 +2,8 @@
 
 from .cache import INDEX_SCHEMA_VERSION, IndexResult, RefreshReport, load_or_refresh
 from .dicom import read_dicom_metadata
+from .folds import LeakageError, make_fold_assignments, validate_no_leakage
+from .geometry import GeometryConfig, OrderingResult, order_series_slices
 from .index import discover_dataset
 from .laterality import (LateralityEvidence, LateralityResolution, parse_laterality_text,
                          resolve_series_laterality, resolve_study_laterality)
@@ -11,10 +13,16 @@ from .normalization import NormalizationPlan, build_normalization_plan
 from .orientation import (OrientationDescriptor, assess_orientation_consistency,
                           describe_series_orientation)
 from .provenance import OrientationConfig, OrientationProvenance, build_orientation_provenance
+from .selection import SliceSelectionConfig, SliceSelectionResult, SliceSelector, select_slices
+from .smoke import run_data_smoke
+from .synthetic import SyntheticConfig, generate_synthetic_dataset
 
 __all__ = ["INDEX_SCHEMA_VERSION", "IndexResult", "RefreshReport", "load_or_refresh", "DatasetIndex", "LateralityEvidence", "LateralityResolution", "NormalizationPlan",
            "OrientationConfig", "OrientationDescriptor", "OrientationProvenance", "SeriesRecord",
            "SliceRecord", "StudyRecord", "assess_orientation_consistency", "build_normalization_plan",
            "build_orientation_provenance", "describe_series_orientation", "discover_dataset",
            "load_manifest", "parse_laterality_text", "read_dicom_metadata", "resolve_series_laterality",
-           "resolve_study_laterality", "save_manifest"]
+           "resolve_study_laterality", "save_manifest", "LeakageError", "make_fold_assignments",
+           "validate_no_leakage", "GeometryConfig", "OrderingResult", "order_series_slices",
+           "SliceSelectionConfig", "SliceSelectionResult", "SliceSelector", "select_slices",
+           "run_data_smoke", "SyntheticConfig", "generate_synthetic_dataset"]
