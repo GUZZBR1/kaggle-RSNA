@@ -1,0 +1,59 @@
+---
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # v10.1.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.0"
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Install training dependencies
+        run: uv sync --extra training --locked
+
+      - name: Check patch whitespace
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+          else
+            git diff --check "${{ github.event.before }}..${{ github.sha }}"
+          fi
+
+      - name: Run full test suite
+        run: uv run --locked python -m unittest discover -s tests -q
+
+      - name: Compile project and tests
+        run: uv run --locked python -m compileall -q rsna tests
+
+      - name: Run synthetic pipeline smoke
+        run: uv run --locked python -m rsna synthetic smoke
+
+      - name: Run Training Engine smoke
+        run: uv run --locked python -m rsna train smoke --json
+
+      - name: Run CNN-224 baseline smoke
+        run: uv run --locked python -m rsna baseline cnn224 smoke --json
