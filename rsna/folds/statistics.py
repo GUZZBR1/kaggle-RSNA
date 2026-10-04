@@ -54,6 +54,7 @@ def summarize(records: list[dict[str, Any]], assignments: Mapping[str, str], n_f
             known = positive + negative + soft_count
             stats["targets"][name] = {"positive": positive, "negative": negative,
                                       "missing": missing,
+                                      "supervision_count": positive + negative + soft_count,
                                       "soft_count": soft_count, "soft_probability_sum": soft_sum,
                                       "prevalence": (positive + soft_sum) / known if known else None}
     totals = {"n_groups": len(set(group_for_study.values())),
@@ -68,6 +69,7 @@ def summarize(records: list[dict[str, Any]], assignments: Mapping[str, str], n_f
         known = positive + negative + soft_count
         totals["targets"][name] = {"positive": positive, "negative": negative,
                                    "missing": missing,
+                                   "supervision_count": positive + negative + soft_count,
                                    "soft_count": soft_count, "soft_probability_sum": soft_sum,
                                    "prevalence": (positive + soft_sum) / known if known else None}
     sizes = [stats["n_studies"] for stats in fold_stats.values()]
