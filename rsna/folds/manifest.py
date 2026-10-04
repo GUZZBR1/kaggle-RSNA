@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -32,6 +33,16 @@ def save_fold_plan(plan: FoldPlanManifest, path: str | Path) -> str:
         if os.path.exists(temporary):
             os.unlink(temporary)
     return plan.fold_plan_id
+
+
+def lock_fold_plan(path: str | Path) -> FoldPlanManifest:
+    """Lock a saved plan by creating its canonical locked identity and persisting it."""
+    plan = load_fold_plan(path)
+    if plan.locked:
+        return plan
+    locked_plan = replace(plan, locked=True, fold_plan_id="")
+    save_fold_plan(locked_plan, path)
+    return locked_plan
 
 
 def load_fold_plan(path: str | Path, *, dataset_version_id: str | None = None,
