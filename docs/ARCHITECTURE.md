@@ -34,3 +34,14 @@ The content-addressed JSON artifact store verifies payload SHA-256 on read. Tele
 provider-neutral. Configuration and artifact schemas are versioned. The smoke config uses
 placeholder class names; replace them with the competition's canonical target labels before
 real experiments.
+
+## DICOM metadata audit
+
+`rsna.data` provides metadata-only orientation and laterality descriptions. DICOM
+ImageOrientationPatient geometry drives anatomical plane classification; structured
+Laterality/ImageLaterality fields take precedence over conservative text-token fallback.
+Conflicting evidence remains ambiguous and is retained with warnings and confidence in
+serializable provenance. Normalization defaults to `preserve_native`; the optional
+left-canonical mode describes a future operation but does not change pixels. Any future
+applied transform must be included in `DatasetVersion.preprocessing` so dataset identity
+reflects the changed preprocessing. See [ORIENTATION_LATERALITY.md](ORIENTATION_LATERALITY.md).
