@@ -94,7 +94,7 @@ def _parser() -> argparse.ArgumentParser:
     smoke.add_argument("--seed", type=int, default=42)
     smoke.add_argument("--inject", choices=("patient-leakage", "duplicate-sop",
         "orientation-conflict", "missing-position", "missing-metadata", "spacing-irregular",
-        "corrupted-cache"))
+        "corrupted-cache", "hierarchy-mismatch"))
     smoke.add_argument("--keep", nargs="?", const="synthetic-smoke", metavar="DIR",
                        help="keep generated DICOMs and reports in DIR (default: ./synthetic-smoke)")
     _output_options(smoke)

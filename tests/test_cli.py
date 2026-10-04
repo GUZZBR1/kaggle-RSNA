@@ -63,6 +63,7 @@ class DatasetCliTests(unittest.TestCase):
         help_result = run_cli("synthetic", "smoke", "--help")
         self.assertEqual(0, help_result.returncode, help_result.stderr)
         self.assertIn("--inject", help_result.stdout)
+        self.assertIn("hierarchy-mismatch", help_result.stdout)
         with tempfile.TemporaryDirectory() as temp:
             result = run_cli("synthetic", "smoke", "--seed", 42,
                              "--inject", "patient-leakage", "--keep", temp)
@@ -70,6 +71,14 @@ class DatasetCliTests(unittest.TestCase):
             output = json.loads(result.stdout)
             self.assertEqual("EXPECTED_FAILURE", output["status"])
             self.assertIn("PATIENT_CROSS_FOLD", output["issue_types"])
+            self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
+        with tempfile.TemporaryDirectory() as temp:
+            result = run_cli("synthetic", "smoke", "--seed", 42,
+                             "--inject", "hierarchy-mismatch", "--keep", temp)
+            self.assertEqual(0, result.returncode, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual("EXPECTED_FAILURE", output["status"])
+            self.assertIn("Fold CLI rejected Series StudyInstanceUID parent mismatch", output["detected"])
             self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
 
     def test_summary_human_json_and_manifest_inspection(self):
