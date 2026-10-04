@@ -67,5 +67,5 @@ def build_normalization_plan(series: Any, *, orientation: Any = None, laterality
         warnings.append("a left-right reflection is planned; pixel axis is unresolved without full geometry")
     return NormalizationPlan(config.normalization_mode, "LEFT", source_side, plane, flip,
                              "unresolved" if flip else None, False, None,
-                             confidence if not flip or _field(orientation, "normal") is not None else "low",
+                             "low" if flip else confidence,
                              tuple(evidence), tuple(warnings))
