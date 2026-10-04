@@ -70,6 +70,18 @@ class FoldTensorDatasetTests(unittest.TestCase):
         with self.assertRaises(LeakageValidationError):
             FoldTensorDataset(records, self.dataset_version, self.fold_plan)
 
+    def test_selected_single_series_binds_sops_for_leakage_validation(self):
+        records = list(self.records)
+        base = records[0]
+        records[0] = StudyTensorRecord(
+            base.study_id, base.patient_id, base.inputs, base.labels,
+            series_ids=("series-a",), sop_ids=("sop-a-0", "sop-a-1"),
+        )
+        dataset = FoldTensorDataset(records, self.dataset_version, self.fold_plan)
+        slice_rows = [row for row in dataset.leakage_records if row.get("entity_type") == "slice"]
+        self.assertEqual(2, len(slice_rows))
+        self.assertTrue(all(row["series_uid"] == "series-a" for row in slice_rows))
+
     def test_training_shuffle_is_repeatable_and_validation_is_stable(self):
         dataset = FoldTensorDataset(self.records, self.dataset_version, self.fold_plan)
         def ids(split, seed, epoch):

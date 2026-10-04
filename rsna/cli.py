@@ -123,6 +123,18 @@ def _parser() -> argparse.ArgumentParser:
                               help="directory for content-addressed evaluation artifacts")
     _output_options(evaluate_oof)
     evaluate_oof.set_defaults(format="json")
+    baseline = commands.add_parser("baseline", help="run supported neural baselines")
+    baseline_commands = baseline.add_subparsers(dest="baseline_name", required=True)
+    cnn224 = baseline_commands.add_parser("cnn224", help="run the reproducible CNN-224 baseline")
+    cnn224_commands = cnn224.add_subparsers(dest="baseline_command", required=True)
+    cnn224_smoke = cnn224_commands.add_parser("smoke", help="run a tiny CPU CNN/training/OOF smoke")
+    cnn224_smoke.add_argument("--output-dir", help="persist smoke checkpoints and prediction artifacts")
+    _output_options(cnn224_smoke)
+    cnn224_smoke.set_defaults(format="json")
+    cnn224_run = cnn224_commands.add_parser("run", help="train and evaluate all five canonical folds")
+    cnn224_run.add_argument("--config", required=True, help="CNN-224 TOML run configuration")
+    _output_options(cnn224_run)
+    cnn224_run.set_defaults(format="json")
     parser.add_argument("--config", help="optional TOML defaults")
     parser.add_argument("--debug", action="store_true", help="show traceback for operational errors")
     parser.add_argument("--verbose", action="store_true")
@@ -196,6 +208,15 @@ def _dispatch(args: argparse.Namespace, config: dict[str, Any] | None = None) ->
     if args.group == "evaluate":
         from .evaluation.oof import evaluate_oof_job
         return evaluate_oof_job(args.job, output_dir=args.output_dir), 0
+    if args.group == "baseline":
+        from .baseline import run_cnn224, run_cnn224_smoke
+        if args.baseline_name != "cnn224":
+            raise ValueError(f"unsupported baseline: {args.baseline_name}")
+        if args.baseline_command == "smoke":
+            result = run_cnn224_smoke(args.output_dir)
+            return result, 0 if result["status"] == "succeeded" else 1
+        result = run_cnn224(args.config)
+        return result, 0 if result["status"] == "completed" else 1
     from .inspection.query import (inspect_manifest, inspect_series, inspect_slice,
                                    inspect_study, load_dataset_index, sample_entities)
     from .inspection.summary import build_dataset_stats, build_dataset_summary
@@ -373,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
     if args_list and args_list[0] == "data-index":
         args_list = ["data", "index", *args_list[1:]]
     # Preserve: python -m rsna configs/experiments/smoke.toml
-    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact", "synthetic", "train", "evaluate"}:
+    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact", "synthetic", "train", "evaluate", "baseline"}:
         try:
             print(json.dumps(run_config(args_list[0]), indent=2, sort_keys=True))
             return 0
