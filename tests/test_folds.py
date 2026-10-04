@@ -10,7 +10,7 @@ import unittest
 from rsna.cli import main
 from rsna.folds import generate_fold_plan, load_fold_plan, save_fold_plan
 from rsna.folds.validate import validate_leakage
-from rsna.data.models import DatasetIndex, StudyRecord
+from rsna.data.models import DatasetIndex, SeriesRecord, SliceRecord, StudyRecord
 from rsna.labels import LabelRecord
 from rsna.targets import TARGETS, TARGET_REGISTRY_ID
 
@@ -26,6 +26,7 @@ class FoldPlanTests(unittest.TestCase):
         self.assertEqual(5, len(plan.statistics["folds"]))
         self.assertEqual(100, plan.statistics["total"]["n_studies"])
         self.assertIsNone(plan.statistics["total"]["n_series"])
+        self.assertIsNone(plan.statistics["total"]["n_slices"])
         self.assertTrue(all(stats["n_studies"] == 20 for stats in plan.statistics["folds"].values()))
 
     def test_input_order_does_not_change_assignments_or_identity(self):
@@ -41,6 +42,17 @@ class FoldPlanTests(unittest.TestCase):
         plan = generate_fold_plan(dataset, n_folds=5)
         self.assertEqual(5, plan.statistics["total"]["n_studies"])
         self.assertEqual(5, len(plan.assignments))
+
+    def test_dataset_index_identity_mismatch_is_rejected_even_when_studies_match(self):
+        studies_a = tuple(StudyRecord(f"study_{i}", f"patient_{i}", ()) for i in range(5))
+        studies_b = tuple(StudyRecord(f"study_{i}", f"patient_{i}", ()) for i in range(5))
+        first = DatasetIndex("root-a", "1", studies_a, (), {"n_studies": 5})
+        second = DatasetIndex("root-b", "1", studies_b, (), {"n_studies": 5})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "folds.json"
+            save_fold_plan(generate_fold_plan(first, n_folds=5), path)
+            with self.assertRaisesRegex(ValueError, "DatasetIndex identity mismatch"):
+                load_fold_plan(path, dataset=second)
 
     def test_label_content_is_identity_bearing(self):
         rows = studies(10)
@@ -79,6 +91,14 @@ class FoldPlanTests(unittest.TestCase):
                 {"study_id": "s2", "patient_id": "p2", "series": ["shared"]},
                 *[{"study_id": f"s{i}", "patient_id": f"p{i}"} for i in range(3, 7)]]
         plan = generate_fold_plan(rows, n_folds=2)
+        self.assertEqual(plan.fold_for_study("s1"), plan.fold_for_study("s2"))
+
+    def test_series_linkage_is_described_when_patient_ids_are_absent(self):
+        rows = [{"study_id": "s1", "series": ["shared"]},
+                {"study_id": "s2", "series": ["shared"]},
+                {"study_id": "s3"}]
+        plan = generate_fold_plan(rows, n_folds=2)
+        self.assertEqual("study_id_with_series_uid_linkage", plan.grouping_key)
         self.assertEqual(plan.fold_for_study("s1"), plan.fold_for_study("s2"))
 
     def test_duplicate_study_rejected(self):
@@ -132,10 +152,23 @@ class FoldPlanTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match|conflicts with its indivisible group"):
                 load_fold_plan(path)
 
+    def test_locked_manifest_edit_and_malformed_manifest_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "folds.json"
+            save_fold_plan(generate_fold_plan(studies(10), n_folds=2, locked=True), path)
+            data = json.loads(path.read_text())
+            data["warnings"].append("silently edited")
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(ValueError, "fold_plan_id does not match"):
+                load_fold_plan(path)
+            path.write_text("{malformed")
+            with self.assertRaises(json.JSONDecodeError):
+                load_fold_plan(path)
+
     def test_dataset_mismatch_and_new_study_fail_strictly(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "folds.json"
-            plan = generate_fold_plan(studies(10), n_folds=2)
+            plan = generate_fold_plan(studies(10), n_folds=2, locked=True)
             save_fold_plan(plan, path)
             with self.assertRaisesRegex(ValueError, "DatasetVersion mismatch"):
                 load_fold_plan(path, dataset_version_id="f" * 64)
@@ -153,13 +186,13 @@ class FoldPlanTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "study identity changed"):
                 load_fold_plan(path, dataset=changed)
 
-    def test_missing_expected_studies_are_reported(self):
+    def test_missing_expected_studies_fail_strictly(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "folds.json"
             plan = generate_fold_plan(studies(10), n_folds=2)
             save_fold_plan(plan, path)
-            loaded = load_fold_plan(path, dataset=studies(9))
-            self.assertTrue(any("study_009" in warning for warning in loaded.application_warnings))
+            with self.assertRaisesRegex(ValueError, "missing studies"):
+                load_fold_plan(path, dataset=studies(9))
 
     def test_complete_and_partial_label_statistics_preserve_unknowns(self):
         rows = studies(10)
@@ -171,6 +204,36 @@ class FoldPlanTests(unittest.TestCase):
         self.assertEqual(5, total["ACL"]["negative"])
         self.assertEqual(2, total["Medial Meniscus"]["missing"])
         self.assertEqual(8, total["Medial Meniscus"]["positive"] + total["Medial Meniscus"]["negative"])
+        self.assertEqual(10, total["ACL"]["supervision_count"])
+        self.assertEqual(8, total["Medial Meniscus"]["supervision_count"])
+
+    def test_all_missing_labels_remain_unknown_and_unsupervised(self):
+        rows = studies(10)
+        labels = {row["study_id"]: {"ACL": None} for row in rows}
+        plan = generate_fold_plan(rows, n_folds=2, labels=labels)
+        target = plan.statistics["total"]["targets"]["ACL"]
+        self.assertEqual(10, target["missing"])
+        self.assertEqual(0, target["supervision_count"])
+        self.assertIsNone(target["prevalence"])
+
+    def test_multilabel_assignment_is_order_independent_for_correlated_partial_targets(self):
+        rows, labels = [], {}
+        for patient in range(20):
+            for visit in range(2):
+                study = f"study_{patient:02d}_{visit}"
+                rows.append({"study_id": study, "patient_id": f"patient_{patient:02d}"})
+                known = None if patient % 7 == 0 else int(patient % 4 == 0)
+                labels[study] = {"ACL": known, "MCL": known,
+                                 "Contusion": int(patient == 0) if visit == 0 else None}
+        first = generate_fold_plan(rows, n_folds=5, strategy="multilabel_group_stratified",
+                                   random_state=17, labels=labels)
+        second = generate_fold_plan(list(reversed(rows)), n_folds=5,
+                                    strategy="multilabel_group_stratified", random_state=17,
+                                    labels=dict(reversed(list(labels.items()))))
+        self.assertEqual(first.assignments, second.assignments)
+        self.assertEqual(first.fold_plan_id, second.fold_plan_id)
+        self.assertEqual(40, first.statistics["total"]["targets"]["ACL"]["supervision_count"] +
+                         first.statistics["total"]["targets"]["ACL"]["missing"])
 
     def test_multilabel_strategy_is_explicit_and_requires_observed_labels(self):
         with self.assertRaisesRegex(ValueError, "requires at least one"):
@@ -203,6 +266,54 @@ class FoldPlanTests(unittest.TestCase):
         labels = {row["study_id"]: {"ACL": int(i == 0)} for i, row in enumerate(rows)}
         plan = generate_fold_plan(rows, n_folds=5, labels=labels)
         self.assertTrue(any("rare target ACL" in warning for warning in plan.warnings))
+
+    def test_slice_counts_and_soft_positive_support_are_reported(self):
+        rows = [{"study_id": f"s{i}", "series": [{"series_instance_uid": f"ser{i}",
+                                                        "n_slices": i + 1}]}
+                for i in range(5)]
+        soft = LabelRecord("s0", {"ACL": 0.2}, "manual_review", label_type="soft",
+                           allow_partial=True, allow_soft=True).to_dict()
+        labels = {"s0": soft}
+        plan = generate_fold_plan(rows, n_folds=5, labels=labels)
+        target = plan.statistics["total"]["targets"]["ACL"]
+        self.assertEqual(15, plan.statistics["total"]["n_slices"])
+        self.assertEqual(1, target["supervision_count"])
+        self.assertEqual(1, target["positive_support"])
+        self.assertTrue(any("rare target ACL" in warning for warning in plan.warnings))
+
+    def test_dataset_index_generate_persist_reload_lock_and_order_identity_smoke(self):
+        def make_index(order):
+            items = []
+            for index in order:
+                slices = tuple(SliceRecord(f"{index}/{slice_index}.dcm", 100, {})
+                               for slice_index in range(index + 1))
+                series = SeriesRecord(f"series-{index}", f"study-{index}", slices)
+                items.append(StudyRecord(f"study-{index}", f"patient-{index}", (series,)))
+            return DatasetIndex("synthetic-root", "1", tuple(items), (),
+                                {"n_studies": len(items), "n_slices": sum(range(1, len(items) + 1))})
+
+        dataset = make_index(list(range(10)))
+        shuffled = make_index(list(reversed(range(10))))
+        first = generate_fold_plan(dataset)
+        second = generate_fold_plan(shuffled)
+        self.assertEqual(first.assignments, second.assignments)
+        self.assertEqual(first.fold_plan_id, second.fold_plan_id)
+        self.assertEqual(55, first.statistics["total"]["n_slices"])
+        self.assertEqual(55, sum(value["n_slices"] for value in first.statistics["folds"].values()))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "folds.json"
+            save_fold_plan(first, path)
+            reloaded = load_fold_plan(path, dataset=shuffled)
+            self.assertEqual(first.fold_plan_id, reloaded.fold_plan_id)
+            validate_leakage([{"study_id": f"study-{i}", "patient_id": f"patient-{i}",
+                                "series_ids": (f"series-{i}",)} for i in range(10)],
+                             reloaded.assignments)
+            locked = generate_fold_plan(shuffled, locked=True)
+            self.assertEqual(first.assignments, locked.assignments)
+            save_fold_plan(locked, path)
+            locked_reload = load_fold_plan(path, dataset=dataset)
+            self.assertTrue(locked_reload.locked)
+            self.assertEqual(locked.fold_plan_id, locked_reload.fold_plan_id)
 
     def test_label_records_preserve_official_order_hard_soft_and_missing_semantics(self):
         rows = studies(10)
@@ -284,8 +395,12 @@ class FoldPlanTests(unittest.TestCase):
         plan = generate_fold_plan(studies(10), n_folds=2)
         self.assertEqual(10, sum(v["n_studies"] for v in plan.statistics["folds"].values()))
         schema = json.loads(Path("schemas/fold-plan-manifest.schema.json").read_text())
-        self.assertEqual("FoldPlan Manifest v1", schema["title"])
+        self.assertEqual("FoldPlan Manifest v2", schema["title"])
         self.assertIn("assignments", schema["required"])
+        self.assertEqual(2, schema["properties"]["schema_version"]["const"])
+        self.assertEqual("string", schema["properties"]["generator_version"]["type"])
+        self.assertEqual("object", schema["properties"]["provenance"]["type"])
+        self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["required"]), set(plan.to_dict()))
 
 

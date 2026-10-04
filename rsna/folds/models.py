@@ -7,12 +7,16 @@ from typing import Any, Mapping
 
 from ..identity import digest, freeze_json, jsonable
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+GENERATOR_VERSION = "0.1.0"
 
 
 @dataclass(frozen=True)
 class FoldPlanManifest:
     dataset_version_id: str
+    generator_version: str
+    input_fingerprint: str
+    provenance: Mapping[str, Any]
     strategy: str
     n_folds: int
     random_state: int
@@ -32,6 +36,10 @@ class FoldPlanManifest:
     def __post_init__(self) -> None:
         if not _sha(self.dataset_version_id):
             raise ValueError("dataset_version_id must be a lowercase SHA-256 digest")
+        if not isinstance(self.generator_version, str) or not self.generator_version.strip():
+            raise ValueError("generator_version cannot be empty")
+        if not _sha(self.input_fingerprint):
+            raise ValueError("input_fingerprint must be a lowercase SHA-256 digest")
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"unsupported fold manifest schema version: {self.schema_version}")
         if not isinstance(self.grouping_key, str) or not self.grouping_key.strip():
@@ -71,6 +79,7 @@ class FoldPlanManifest:
         object.__setattr__(self, "study_fingerprints", freeze_json(dict(sorted(self.study_fingerprints.items()))))
         object.__setattr__(self, "configuration", freeze_json(self.configuration))
         object.__setattr__(self, "statistics", freeze_json(self.statistics))
+        object.__setattr__(self, "provenance", freeze_json(self.provenance))
         if any(not isinstance(item, str) for item in self.warnings):
             raise ValueError("warnings must contain strings")
         object.__setattr__(self, "warnings", tuple(self.warnings))
@@ -82,6 +91,8 @@ class FoldPlanManifest:
 
     def _identity_payload(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, "dataset_version_id": self.dataset_version_id,
+                "generator_version": self.generator_version,
+                "input_fingerprint": self.input_fingerprint, "provenance": self.provenance,
                 "strategy": self.strategy, "n_folds": self.n_folds, "random_state": self.random_state,
                 "grouping_key": self.grouping_key, "assignments": self.assignments,
                 "group_assignments": self.group_assignments, "study_groups": self.study_groups,
