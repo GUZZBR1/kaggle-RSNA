@@ -73,9 +73,11 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
             "missing-metadata": "missing PixelSpacing metadata detected",
             "spacing-irregular": "irregular physical slice spacing detected",
             "corrupted-cache": "cache validation rejected corruption",
+            "hierarchy-mismatch": "Fold CLI rejected Series StudyInstanceUID parent mismatch",
         }
         for injection in ("patient-leakage", "duplicate-sop", "orientation-conflict",
-                          "missing-position", "missing-metadata", "spacing-irregular", "corrupted-cache"):
+                          "missing-position", "missing-metadata", "spacing-irregular", "corrupted-cache",
+                          "hierarchy-mismatch"):
             with self.subTest(injection=injection), tempfile.TemporaryDirectory() as temp:
                 result = self.run_smoke(temp, injection=injection)
                 self.assertNotEqual(result["status"], "READY")
