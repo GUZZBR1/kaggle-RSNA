@@ -68,6 +68,7 @@ class TargetAndLabelTests(unittest.TestCase):
     def test_values_are_immutable_and_all_serializations_are_canonical(self):
         values = dict.fromkeys(reversed(TARGETS), 0)
         record = LabelRecord("uid-1", values, "official_gold")
+        canonical = LabelRecord("uid-1", dict.fromkeys(TARGETS, 0), "official_gold")
         record_id = record.record_id
         self.assertIsInstance(record.values, MappingProxyType)
         with self.assertRaises(TypeError):
@@ -77,6 +78,10 @@ class TargetAndLabelTests(unittest.TestCase):
         self.assertEqual(TARGETS, tuple(record.values))
         self.assertEqual(TARGETS, tuple(record.to_dict()["values"]))
         self.assertEqual(TARGETS, tuple(name for name in record.to_row() if name in TARGETS))
+        self.assertEqual(canonical.values, record.values)
+        self.assertEqual(canonical.to_dict(), record.to_dict())
+        self.assertEqual(canonical.to_row(), record.to_row())
+        self.assertEqual(canonical.record_id, record.record_id)
 
     def test_masks_and_row_identity_are_validated(self):
         values = dict.fromkeys(TARGETS, 0)
@@ -220,6 +225,20 @@ class TargetAndLabelTests(unittest.TestCase):
             self.assertIn("title", parsed)
         registry = json.loads((schemas / "target-registry.schema.json").read_text())
         self.assertEqual(1, registry["properties"]["schema_version"]["const"])
+        self.assertEqual(TARGET_REGISTRY.to_dict()["targets"],
+                         registry["properties"]["targets"]["const"])
+        self.assertNotEqual(list(reversed(TARGET_REGISTRY.to_dict()["targets"])),
+                            registry["properties"]["targets"]["const"])
+        unknown_targets = TARGET_REGISTRY.to_dict()["targets"] + [
+            {"name": "Extra", "index": 12, "aliases": []}]
+        self.assertNotEqual(unknown_targets, registry["properties"]["targets"]["const"])
+        label_schema = json.loads((schemas / "label-record.schema.json").read_text())
+        self.assertEqual(TARGET_REGISTRY.registry_id,
+                         label_schema["properties"]["target_registry_id"]["const"])
+        self.assertEqual([0, 1, None], label_schema["allOf"][0]["then"]["properties"]["values"]
+                         ["properties"]["ACL"]["enum"])
+        self.assertEqual(["official_gold", "report_regex", "report_llm", "pseudo_label", "manual_review"],
+                         label_schema["properties"]["provenance"]["enum"])
 
 
 if __name__ == "__main__":
