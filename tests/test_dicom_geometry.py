@@ -129,8 +129,8 @@ class DicomGeometryTests(unittest.TestCase):
         ]
         result = order_series_slices(slices)
         self.assertEqual(["a.dcm", "b.dcm"], [item["relative_path"] for item in result.slices])
-        self.assertEqual((0.0, 10.0), result.projected_positions_mm)
-        self.assertEqual([0.0, 10.0], result.to_dict()["projected_positions_mm"])
+        self.assertEqual((0.0, 10.0), result.ordered_positions_mm)
+        self.assertEqual([0.0, 10.0], result.to_dict()["ordered_positions_mm"])
 
     def test_duplicate_policies_and_non_geometry_spacing_metadata(self):
         values = [slice_at(0, instance=1), slice_at(0, instance=2)]
