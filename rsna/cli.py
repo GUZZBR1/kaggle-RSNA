@@ -112,6 +112,14 @@ def _parser() -> argparse.ArgumentParser:
     train_run = train_commands.add_parser("run", help="run a declared job using importable data/model factories")
     train_run.add_argument("--job", required=True, help="JSON job document")
     _output_options(train_run)
+    evaluate = commands.add_parser("evaluate", help="evaluate model predictions")
+    evaluate_commands = evaluate.add_subparsers(dest="evaluate_command", required=True)
+    evaluate_oof = evaluate_commands.add_parser("oof", help="aggregate out-of-fold predictions and report AUC")
+    evaluate_oof.add_argument("--job", required=True, help="JSON OOF evaluation job")
+    evaluate_oof.add_argument("--output-dir", default=None,
+                              help="directory for content-addressed evaluation artifacts")
+    _output_options(evaluate_oof)
+    evaluate_oof.set_defaults(format="json")
     parser.add_argument("--config", help="optional TOML defaults")
     parser.add_argument("--debug", action="store_true", help="show traceback for operational errors")
     parser.add_argument("--verbose", action="store_true")
@@ -182,6 +190,9 @@ def _dispatch(args: argparse.Namespace, config: dict[str, Any] | None = None) ->
             return result, 0 if result["status"] in {"succeeded", "interrupted"} else 1
         result = _run_training_job(Path(args.job))
         return result, 0 if result["status"] == "succeeded" else 1
+    if args.group == "evaluate":
+        from .evaluation.oof import evaluate_oof_job
+        return evaluate_oof_job(args.job, output_dir=args.output_dir), 0
     from .inspection.query import (inspect_manifest, inspect_series, inspect_slice,
                                    inspect_study, load_dataset_index, sample_entities)
     from .inspection.summary import build_dataset_stats, build_dataset_summary
@@ -317,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     if args_list and args_list[0] == "data-index":
         args_list = ["data", "index", *args_list[1:]]
     # Preserve: python -m rsna configs/experiments/smoke.toml
-    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact", "synthetic", "train"}:
+    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact", "synthetic", "train", "evaluate"}:
         try:
             print(json.dumps(run_config(args_list[0]), indent=2, sort_keys=True))
             return 0

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OOF Prediction Rows v1",
+  "type": "object",
+  "required": ["schema_version", "class_names", "rows"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "class_names": {"type": "array", "items": {"type": "string"}},
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["StudyInstanceUID", "scores"],
+        "additionalProperties": false,
+        "properties": {
+          "StudyInstanceUID": {"type": "string", "minLength": 1},
+          "scores": {
+            "type": "array",
+            "minItems": 12,
+            "maxItems": 12,
+            "items": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        }
+      }
+    }
+  }
+}
