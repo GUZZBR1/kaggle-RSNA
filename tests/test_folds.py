@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from rsna.cli import main
-from rsna.folds import generate_fold_plan, load_fold_plan, save_fold_plan
+from rsna.folds import FoldGenerationConfig, generate_fold_plan, load_fold_plan, save_fold_plan
 from rsna.folds.validate import validate_leakage
 from rsna.data.models import DatasetIndex, SeriesRecord, SliceRecord, StudyRecord
 from rsna.labels import LabelRecord, StudyDatasetRecord, StudyMetadata
@@ -42,6 +42,34 @@ class FoldPlanTests(unittest.TestCase):
         plan = generate_fold_plan(dataset, n_folds=5)
         self.assertEqual(5, plan.statistics["total"]["n_studies"])
         self.assertEqual(5, len(plan.assignments))
+
+    def test_generation_config_uses_canonical_generator_on_dataset_index(self):
+        dataset = DatasetIndex("root", "1", tuple(
+            StudyRecord(f"study_{i}", f"patient_{i}", ()) for i in range(10)), (), {"n_studies": 10})
+        config = FoldGenerationConfig(n_folds=5, random_state=19,
+                                      size_deviation_threshold=0.3,
+                                      prevalence_range_threshold=0.4)
+        configured = generate_fold_plan(dataset, config=config)
+        explicit = generate_fold_plan(dataset, n_folds=5, random_state=19,
+                                      size_deviation_threshold=0.3,
+                                      prevalence_range_threshold=0.4)
+        self.assertEqual(explicit.fold_plan_id, configured.fold_plan_id)
+        with self.assertRaisesRegex(ValueError, "finite nonnegative"):
+            FoldGenerationConfig(size_deviation_threshold=float("inf"))
+
+    def test_manifest_reader_rejects_boolean_schema_version_and_duplicate_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "folds.json"
+            plan = generate_fold_plan(studies(4), n_folds=2)
+            save_fold_plan(plan, path)
+            payload = plan.to_dict()
+            payload["schema_version"] = True
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "schema version"):
+                load_fold_plan(path)
+            path.write_text('{"schema_version": 2, "schema_version": 2}', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                load_fold_plan(path)
 
     def test_canonical_study_labels_join_by_uid_not_content_hash(self):
         dataset = DatasetIndex("root", "1", tuple(
