@@ -66,6 +66,7 @@ python -m rsna synthetic smoke --inject missing-position
 python -m rsna synthetic smoke --inject missing-metadata
 python -m rsna synthetic smoke --inject spacing-irregular
 python -m rsna synthetic smoke --inject corrupted-cache
+python -m rsna synthetic smoke --inject hierarchy-mismatch
 ```
 
 Detected faults produce `status: EXPECTED_FAILURE` and an explanation in JSON, with exit
