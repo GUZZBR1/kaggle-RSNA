@@ -16,6 +16,8 @@ class TargetAndLabelTests(unittest.TestCase):
         self.assertEqual("ACL", TARGET_REGISTRY.target_name(0))
         self.assertEqual(0, TARGET_REGISTRY.target_index("ACL"))
         self.assertEqual(TARGETS, validate_targets(TARGETS))
+        self.assertEqual(TARGET_REGISTRY.registry_id,
+                         TargetRegistry.from_dict(TARGET_REGISTRY.to_dict()).registry_id)
         self.assertEqual(TARGETS, tuple(item["name"] for item in TARGET_REGISTRY.to_dict()["targets"]))
 
     def test_aliases_and_ambiguous_alias_rejection(self):
@@ -48,6 +50,8 @@ class TargetAndLabelTests(unittest.TestCase):
         self.assertFalse(record.mask[1])
         self.assertEqual(11, sum(record.mask))
         self.assertEqual("official_gold", record.to_dict()["provenance"])
+        self.assertEqual(record.record_id, LabelRecord.from_dict(
+            json.loads(json.dumps(record.to_dict()))).record_id)
         self.assertEqual(1, record.to_row()["ACL"])
         with self.assertRaisesRegex(ValueError, "hard label"):
             LabelRecord("study-1", {**labels, "ACL": 2}, "official_gold")
@@ -102,6 +106,9 @@ class TargetAndLabelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "order mismatch"):
             PredictionArtifact(ref, "inference", candidate.model_candidate_id,
                 dataset.dataset_version_id, "e" * 64, (*TARGETS[1:], TARGETS[0]), 1)
+        with self.assertRaisesRegex(ValueError, "order mismatch"):
+            PredictionArtifact(ref, "inference", candidate.model_candidate_id,
+                dataset.dataset_version_id, "e" * 64, (*TARGETS, "Extra"), 1)
         auc = dict.fromkeys(TARGETS, 0.5)
         with self.assertRaisesRegex(ValueError, "exactly every"):
             Evaluation("f" * 64, dataset.dataset_version_id, candidate.model_candidate_id,
@@ -113,6 +120,24 @@ class TargetAndLabelTests(unittest.TestCase):
             dataset.dataset_version_id, evaluation.evaluation_id,
             (pred.prediction_artifact_id,), "csv")
         self.assertEqual(TARGETS, tuple(submission.to_dict()["class_names"]))
+        self.assertEqual(("StudyInstanceUID", *TARGETS), submission.column_order)
+        with self.assertRaisesRegex(ValueError, "order mismatch"):
+            SubmissionArtifact(ref, candidate.model_candidate_id,
+                dataset.dataset_version_id, evaluation.evaluation_id,
+                (pred.prediction_artifact_id,), "csv", class_names=(*TARGETS[1:], TARGETS[0]))
+        serialized_submission = submission.to_dict()
+        serialized_submission["column_order"][1], serialized_submission["column_order"][2] = (
+            serialized_submission["column_order"][2], serialized_submission["column_order"][1])
+        with self.assertRaisesRegex(ValueError, "column order"):
+            SubmissionArtifact.from_dict(serialized_submission)
+        self.assertEqual(dataset.dataset_version_id,
+                         DatasetVersion.from_dict(json.loads(json.dumps(dataset.to_dict()))).dataset_version_id)
+        self.assertEqual(pred.prediction_artifact_id,
+                         PredictionArtifact.from_dict(json.loads(json.dumps(pred.to_dict()))).prediction_artifact_id)
+        self.assertEqual(evaluation.evaluation_id,
+                         Evaluation.from_dict(json.loads(json.dumps(evaluation.to_dict()))).evaluation_id)
+        self.assertEqual(submission.submission_artifact_id,
+                         SubmissionArtifact.from_dict(json.loads(json.dumps(submission.to_dict()))).submission_artifact_id)
 
     def test_row_interop_preserves_missing_as_none(self):
         import math

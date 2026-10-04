@@ -63,6 +63,13 @@ class DatasetVersion:
                 "schema_version": self.schema_version,
                 "dataset_version_id": self.dataset_version_id}
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "DatasetVersion":
+        _verify_target_registry(data)
+        payload = dict(data)
+        payload.pop("target_registry_id")
+        return cls(**payload)
+
 
 @dataclass(frozen=True)
 class FoldPlan:
@@ -203,6 +210,13 @@ class ExperimentSpec:
                 "evaluation_policy": jsonable(self.evaluation_policy),
                 "schema_version": self.schema_version, "experiment_id": self.experiment_id}
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ExperimentSpec":
+        _verify_target_registry(data)
+        payload = dict(data)
+        payload.pop("target_registry_id")
+        return cls(**payload)
+
 
 @dataclass(frozen=True)
 class TrainingJob:
@@ -270,6 +284,10 @@ class ArtifactReference:
         return {"artifact_id": self.artifact_id, "media_type": self.media_type,
                 "uri": self.uri, "sha256": self.sha256,
                 "manifest": jsonable(self.manifest), "schema_version": self.schema_version}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "ArtifactReference":
+        return cls(**dict(data))
 
 
 @dataclass(frozen=True)
@@ -443,6 +461,14 @@ class PredictionArtifact:
                 "fold_id": self.fold_id, "schema_version": self.schema_version,
                 "prediction_artifact_id": self.prediction_artifact_id}
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "PredictionArtifact":
+        _verify_target_registry(data)
+        payload = dict(data)
+        payload.pop("target_registry_id")
+        payload["artifact"] = ArtifactReference.from_dict(payload["artifact"])
+        return cls(**payload)
+
 
 @dataclass(frozen=True)
 class Evaluation:
@@ -518,6 +544,13 @@ class Evaluation:
                 "target_registry_id": TARGET_REGISTRY_ID,
                 "evaluation_id": self.evaluation_id}
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "Evaluation":
+        _verify_target_registry(data)
+        payload = dict(data)
+        payload.pop("target_registry_id")
+        return cls(**payload)
+
 
 @dataclass(frozen=True)
 class SubmissionArtifact:
@@ -531,6 +564,10 @@ class SubmissionArtifact:
     submission_artifact_id: str = ""
     class_names: tuple[str, ...] = TARGETS
     target_schema_version: int = TARGET_SCHEMA_VERSION
+
+    @property
+    def column_order(self) -> tuple[str, ...]:
+        return ("StudyInstanceUID", *self.class_names)
 
     def __post_init__(self) -> None:
         for field_name in ("model_candidate_id", "dataset_version_id", "evaluation_id"):
@@ -549,6 +586,7 @@ class SubmissionArtifact:
                            "evaluation_id": self.evaluation_id,
                            "prediction_artifact_ids": self.prediction_artifact_ids,
                            "format": self.format, "class_names": self.class_names,
+                           "column_order": self.column_order,
                            "target_schema_version": self.target_schema_version,
                            "target_registry_id": TARGET_REGISTRY_ID})
         _match_id(self.submission_artifact_id, expected, "submission_artifact_id")
@@ -561,10 +599,22 @@ class SubmissionArtifact:
                 "evaluation_id": self.evaluation_id,
                 "prediction_artifact_ids": list(self.prediction_artifact_ids),
                 "class_names": list(self.class_names),
+                "column_order": list(self.column_order),
                 "target_schema_version": self.target_schema_version,
                 "target_registry_id": TARGET_REGISTRY_ID,
                 "format": self.format, "schema_version": self.schema_version,
                 "submission_artifact_id": self.submission_artifact_id}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "SubmissionArtifact":
+        _verify_target_registry(data)
+        if tuple(data.get("column_order", ())) != ("StudyInstanceUID", *data.get("class_names", ())):
+            raise ValueError("serialized submission column order does not match target order")
+        payload = dict(data)
+        payload.pop("target_registry_id")
+        payload.pop("column_order")
+        payload["artifact"] = ArtifactReference.from_dict(payload["artifact"])
+        return cls(**payload)
 
 
 def _validate_resources(resources: Mapping[str, Any]) -> None:
@@ -613,6 +663,11 @@ def _schema(value: int) -> None:
 def _target_schema(value: int) -> None:
     if type(value) is not int or value != TARGET_SCHEMA_VERSION:
         raise ValueError(f"unsupported target schema version: {value}")
+
+
+def _verify_target_registry(data: Mapping[str, Any]) -> None:
+    if data.get("target_registry_id") != TARGET_REGISTRY_ID:
+        raise ValueError("serialized target registry identity does not match this version")
 
 
 def _match_id(supplied: str, expected: str, label: str) -> None:

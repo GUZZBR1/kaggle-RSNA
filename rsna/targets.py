@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from .identity import digest
 
@@ -98,6 +98,17 @@ class TargetRegistry:
                 "targets": [{"name": item.name, "index": index,
                              "aliases": list(item.aliases)}
                             for index, item in enumerate(self.targets)]}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "TargetRegistry":
+        if not isinstance(data, Mapping) or not isinstance(data.get("targets"), list):
+            raise ValueError("serialized target registry must contain a targets array")
+        targets = data["targets"]
+        for index, item in enumerate(targets):
+            if not isinstance(item, Mapping) or type(item.get("index")) is not int or item["index"] != index:
+                raise ValueError("serialized target registry indexes do not match canonical order")
+        return cls(tuple(Target(item["name"], tuple(item["aliases"])) for item in targets),
+                   data.get("schema_version"))
 
 
 TARGET_REGISTRY = TargetRegistry()

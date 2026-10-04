@@ -29,6 +29,10 @@ class StudyMetadata:
         return {"study_id": self.study_id, "patient_id": self.patient_id,
                 "metadata": jsonable(self.metadata)}
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "StudyMetadata":
+        return cls(**dict(data))
+
 
 @dataclass(frozen=True)
 class StudyDatasetRecord:
@@ -52,6 +56,13 @@ class StudyDatasetRecord:
     def to_dict(self) -> dict[str, Any]:
         return {"study": self.study.to_dict(), "labels": self.labels.to_dict(),
                 "dataset_version_id": self.dataset_version_id}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "StudyDatasetRecord":
+        payload = dict(data)
+        payload["study"] = StudyMetadata.from_dict(payload["study"])
+        payload["labels"] = LabelRecord.from_dict(payload["labels"])
+        return cls(**payload)
 
 
 @dataclass(frozen=True)
@@ -120,6 +131,20 @@ class LabelRecord:
                 "mask": list(self.mask), "provenance": self.provenance,
                 "label_type": self.label_type, "allow_partial": self.allow_partial,
                 "allow_soft": self.allow_soft}
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "LabelRecord":
+        if tuple(data.get("targets", ())) != TARGETS:
+            raise ValueError("serialized label target order does not match the registry")
+        if data.get("target_registry_id") != TARGET_REGISTRY_ID:
+            raise ValueError("serialized target registry identity does not match this version")
+        payload = {key: data[key] for key in (
+            "study_id", "values", "provenance", "label_type", "allow_partial",
+            "allow_soft", "target_schema_version", "patient_id") if key in data}
+        record = cls(**payload)
+        if tuple(data.get("mask", ())) != record.mask:
+            raise ValueError("serialized label mask does not match label values")
+        return record
 
     def to_row(self) -> dict[str, Any]:
         return {"StudyInstanceUID": self.study_id, "PatientID": self.patient_id, **self.values,
