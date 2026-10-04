@@ -14,6 +14,8 @@ Python 3.11 or newer; DICOM metadata indexing uses `pydicom`.
 python -m unittest discover -s tests -v
 python -m rsna configs/experiments/smoke.toml
 python -m rsna synthetic smoke
+python -m rsna data index --input /data/rsna --output artifacts/dataset-index
+python -m rsna data summary --manifest artifacts/dataset-index/manifest.json
 ```
 
 The CLI uses an explicitly synthetic mock provider and synthetic target names. Its
@@ -24,14 +26,12 @@ Ray is optional: `pip install -e '.[ray]'`. Cloud and Ray providers adapt inject
 boundaries and do not provision or assume a particular vendor or cluster.
 
 Fold generation is available with `python -m rsna folds`; see [fold documentation](docs/FOLDS.md).
-Also see [architecture](docs/ARCHITECTURE.md), [target and label contracts](docs/TARGETS_AND_LABELS.md),
-and [migration notes](docs/MIGRATION.md).
 
-Dataset metadata can be indexed without decoding image pixels:
+See [architecture](docs/ARCHITECTURE.md), [target and label contracts](docs/TARGETS_AND_LABELS.md),
+[migration notes](docs/MIGRATION.md), and [CLI usage](docs/CLI.md).
 
-```bash
-python -m rsna data-index --input /data/rsna --output artifacts/dataset-index
-```
+Dataset metadata can be indexed without decoding image pixels. The Issue 1 spelling
+`python -m rsna data-index ...` remains an alias for `python -m rsna data index ...`.
 
 See [dataset indexing](docs/DATA_INDEX.md) for discovery rules, manifest loading, and
 the `DatasetVersion` binding.
