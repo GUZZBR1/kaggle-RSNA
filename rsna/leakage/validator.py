@@ -39,7 +39,7 @@ def validate_split(train_records: Sequence[Mapping[str, Any]],
     records: list[Mapping[str, Any]] = []
     for split_name, split_records in (("train", train_records), ("validation", validation_records),
                                       ("test", test_records), ("holdout", holdout_records)):
-        for record in split_records:
+        for record in records_of(split_records):
             records.append({**record, "fold_id": split_name})
     return validate_leakage(records, policy=policy, dataset_version_id=dataset_version_id,
                             severity_overrides=severity_overrides)
@@ -78,7 +78,9 @@ def validate_leakage(dataset_index: Any, fold_plan: FoldPlan | Mapping[str, Any]
         index_version = index_version or getattr(dataset_index, "dataset_version_id", None)
     raw_dataset_version = dataset_version
     if isinstance(raw_dataset_version, Mapping):
-        raw_dataset_version = DatasetVersion(**raw_dataset_version)
+        raw_dataset_version = (DatasetVersion.from_dict(raw_dataset_version)
+                               if "target_registry_id" in raw_dataset_version
+                               else DatasetVersion(**raw_dataset_version))
     if raw_dataset_version is not None and not isinstance(raw_dataset_version, DatasetVersion):
         raise TypeError("dataset_version must be a DatasetVersion or its JSON mapping")
     if raw_dataset_version is not None:
@@ -132,8 +134,9 @@ def validate_leakage(dataset_index: Any, fold_plan: FoldPlan | Mapping[str, Any]
                 emit(LeakageIssueType.UNKNOWN_GROUP_ID, str(explicit_group),
                      message="Record references a group absent from the assignment manifest")
             keys = [str(value(record, key)) for key in ("sop_uid", "series_uid", "study_uid", "patient_id",
-                                                         "group_id", "id", "entity_id")
+                                                         "group_id", "id", "entity_id", "study_id", "series_id", "slice_id")
                     if value(record, key) is not None]
+            keys.extend(record.get("_assignment_ids", ()))
             matched_keys = {key for key in keys if key in assignment_map}
             used_assignment_keys.update(matched_keys)
             known = {assignment_map[key] for key in matched_keys}
@@ -146,17 +149,31 @@ def validate_leakage(dataset_index: Any, fold_plan: FoldPlan | Mapping[str, Any]
                      message="Record fold conflicts with the assignment manifest")
             elif known:
                 records[index] = {**record, "fold_id": next(iter(known))}
-            elif current is None:
-                emit(LeakageIssueType.UNKNOWN_GROUP_ID, keys[0] if keys else "<record>",
-                     message="No fold assignment is available for this record")
         for unknown in sorted(set(assignment_map) - used_assignment_keys):
             emit(LeakageIssueType.UNKNOWN_GROUP_ID, unknown,
                  folds=(assignment_map[unknown],),
                  message="Assignment manifest contains an identity absent from the dataset")
 
+    # Study/series rows represent aggregates. Assignments on their children also
+    # assign a parent when all descendants agree; disagreement stays on the
+    # children so identity checks can report each crossed relation.
+    descendant_folds: dict[str, set[str]] = defaultdict(set)
+    for record in records:
+        fold = value(record, "fold_id")
+        if fold is not None:
+            for ancestor in record.get("_assignment_ids", ())[:-1]:
+                descendant_folds[ancestor].add(str(fold))
+    for index, record in enumerate(records):
+        identity = record.get("study_id", record.get("series_id"))
+        folds = descendant_folds.get(identity, set())
+        if value(record, "fold_id") is None and len(folds) == 1:
+            records[index] = {**record, "fold_id": next(iter(folds))}
+
     known_folds = set(plan.fold_ids) if plan else set()
     for record in records:
         fold = value(record, "fold_id")
+        if fold is None and descendant_folds.get(record.get("study_id", record.get("series_id"))):
+            continue
         if fold is None:
             emit(LeakageIssueType.UNKNOWN_GROUP_ID, _entity_id(record),
                  message="Record has no fold or split assignment")
@@ -172,9 +189,9 @@ def validate_leakage(dataset_index: Any, fold_plan: FoldPlan | Mapping[str, Any]
     warnings = sum(issue.severity == "warning" for issue in issues)
     checked = {
         "n_patients_checked": len(groups(records, "patient_id")),
-        "n_studies_checked": len(groups(records, "study_uid")),
-        "n_series_checked": len(groups(records, "series_uid")),
-        "n_slices_checked": len(groups(records, "sop_uid")),
+        "n_studies_checked": len(_entity_groups(records, "study_uid", "study_id")),
+        "n_series_checked": len(_entity_groups(records, "series_uid", "series_id")),
+        "n_slices_checked": len(_entity_groups(records, "sop_uid", "slice_id")),
         "n_file_hashes_checked": len(groups(records, "file_hash")),
     }
     counts = {**checked, "n_issues": len(issues), "n_errors": errors, "n_warnings": warnings,
@@ -214,7 +231,8 @@ def _input_material_sha256(records: list[Mapping[str, Any]], assignments: Mappin
               "parent_artifact_ids", "label_provenance", "metadata")
     material_records = []
     for record in records:
-        material_records.append({key: _without_locations(record[key]) for key in fields if key in record})
+        material_records.append({key: _without_locations(value(record, key))
+                                 for key in fields if value(record, key) is not None})
     material_records.sort(key=canonical_json)
     clean_assignments = {key: _without_locations(value) for key, value in assignments.items()}
     return digest({"records": material_records, "assignments": clean_assignments,
@@ -245,8 +263,24 @@ def _looks_like_absolute_path(value: Any) -> bool:
                                        or (len(value) > 2 and value[1:3] == ":\\"))
 
 
+def _entity_groups(records: list[Mapping[str, Any]], uid_field: str,
+                   content_id_field: str) -> dict[str, list[Mapping[str, Any]]]:
+    result: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for record in records:
+        identity = value(record, uid_field) or record.get(content_id_field)
+        if identity is not None:
+            result[str(identity)].append(record)
+    return dict(result)
+
+
 def _entity_id(record: Mapping[str, Any]) -> str:
-    for field in ("sop_uid", "series_uid", "study_uid", "patient_id", "id", "entity_id"):
+    kind = record.get("entity_type")
+    for expected_kind, uid, content_id in (("slice", "sop_uid", "slice_id"),
+                                          ("series", "series_uid", "series_id"),
+                                          ("study", "study_uid", "study_id")):
+        if kind == expected_kind and record.get(content_id):
+            return str(value(record, uid) or record[content_id])
+    for field in ("sop_uid", "series_uid", "study_uid", "patient_id", "id", "entity_id", "slice_id", "series_id", "study_id"):
         item = value(record, field)
         if item is not None:
             return str(item)
@@ -303,6 +337,16 @@ def _identity_checks(records: list[Mapping[str, Any]], emit: Any) -> None:
             emit(LeakageIssueType.SLICE_SERIES_MISMATCH, sop, related=series,
                  message="One SOPInstanceUID is associated with multiple SeriesInstanceUIDs")
 
+    for uid, content_id, kind in (("study_uid", "study_id", LeakageIssueType.STUDY_CROSS_FOLD),
+                                   ("series_uid", "series_id", LeakageIssueType.SERIES_CROSS_FOLD),
+                                   ("sop_uid", "slice_id", LeakageIssueType.SLICE_CROSS_FOLD)):
+        anonymous = [record for record in records if value(record, uid) is None]
+        for identity, rows in groups(anonymous, content_id).items():
+            folds = sorted({str(value(row, "fold_id")) for row in rows if value(row, "fold_id") is not None})
+            if len(folds) > 1:
+                emit(kind, identity, folds=folds,
+                     message=f"Canonical {content_id} appears in multiple folds/splits")
+
     metadata_groups: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for row in records:
         meta_key = row.get("metadata_identity")
@@ -318,6 +362,14 @@ def _identity_checks(records: list[Mapping[str, Any]], emit: Any) -> None:
 
 
 def _relationship_checks(records: list[Mapping[str, Any]], emit: Any) -> None:
+    for record in records:
+        for field, parent_field, issue_type in (
+                ("study_uid", "_parent_study_uid", LeakageIssueType.SERIES_STUDY_MISMATCH),
+                ("series_uid", "_parent_series_uid", LeakageIssueType.SLICE_SERIES_MISMATCH)):
+            declared, parent = value(record, field), record.get(parent_field)
+            if declared is not None and parent is not None and str(declared) != str(parent):
+                emit(issue_type, _entity_id(record), related=(str(declared), str(parent)),
+                     message="Declared parent identity conflicts with the nested dataset relation")
     series_rows = groups(records, "series_uid")
     study_by_series: dict[str, set[str]] = defaultdict(set)
     for record in records:

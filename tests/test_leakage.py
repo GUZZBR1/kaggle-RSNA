@@ -8,6 +8,7 @@ from pathlib import Path
 from rsna.contracts import DatasetVersion, FoldPlan, TrainingJob
 from rsna.data.models import DatasetIndex, SeriesRecord, SliceRecord, StudyRecord
 from rsna.identity import digest
+from rsna.targets import TARGETS
 from rsna.leakage import (LeakageIssueType, LeakagePolicy, LeakageReport,
                           LeakageValidationError, require_valid_leakage_report,
                           validate_leakage, validate_split)
@@ -45,6 +46,106 @@ class LeakageTests(unittest.TestCase):
         self.assertEqual(1, direct.counts["n_slices_checked"])
         self.assertEqual(direct.report_id, manifest.report_id)
         self.assertEqual(index.index_id, direct.to_dict()["provenance"]["dataset_index_id"])
+
+    def canonical_index(self, metadata=None, study_uid="st1", series_study="st1"):
+        slice_record = SliceRecord("train/a.dcm", 12, metadata or {"SOPInstanceUID": "sop1"})
+        series = SeriesRecord("se1", series_study, (slice_record,))
+        study = StudyRecord(study_uid, "p1", (series,))
+        return DatasetIndex("root", "1", (study,), (), {"n_studies": 1})
+
+    def test_canonical_content_ids_assign_descendants_and_parents(self):
+        index = self.canonical_index()
+        study = index.studies[0]
+        series = study.series[0]
+        for identity in (study.study_id, series.series_id, series.slices[0].slice_id, "sop1"):
+            with self.subTest(identity=identity):
+                direct = validate_leakage(index, self.plan, assignments={identity: "fold_0"})
+                saved = validate_leakage({"dataset_index": index.to_dict()}, self.plan,
+                                         assignments={identity: "fold_0"})
+                self.assertTrue(direct.passed, direct.to_dict())
+                self.assertEqual(direct.report_id, saved.report_id)
+                self.assertFalse(any(issue.type == LeakageIssueType.DUPLICATE_SOP_UID
+                                     for issue in direct.issues))
+
+    def test_canonical_parent_content_assignment_conflict_is_reported(self):
+        index = self.canonical_index()
+        study = index.studies[0]
+        report = validate_leakage(index, self.plan, assignments={study.study_id: "fold_0",
+                     study.series[0].slices[0].slice_id: "fold_1"})
+        self.assertFalse(report.passed)
+        self.assertIn(LeakageIssueType.UNKNOWN_GROUP_ID, {issue.type for issue in report.issues})
+
+    def test_canonical_records_and_named_split_collections(self):
+        index = self.canonical_index()
+        study = index.studies[0]
+        series = study.series[0]
+        slice_record = series.slices[0]
+        for record in (study, series, slice_record):
+            report = validate_leakage([record], self.plan,
+                                      assignments={"sop1": "fold_0"})
+            self.assertEqual(1, report.counts["n_slices_checked"])
+        report = validate_split([study], [study])
+        self.assertIn(LeakageIssueType.SLICE_CROSS_FOLD, {issue.type for issue in report.issues})
+
+    def test_canonical_relative_path_is_evidence_and_not_an_assignment_identity(self):
+        index = self.canonical_index()
+        report = validate_leakage(index, self.plan,
+                                 assignments={"train/a.dcm": "fold_0"})
+        self.assertFalse(report.passed)
+        self.assertIn("train/a.dcm", {issue.entity_id for issue in report.issues
+                                     if issue.type == LeakageIssueType.UNKNOWN_GROUP_ID})
+        overlap = validate_split([index.studies[0]], [index.studies[0]])
+        issue = next(issue for issue in overlap.issues if issue.type == LeakageIssueType.SLICE_CROSS_FOLD)
+        self.assertEqual(["train/a.dcm"], issue.to_dict()["evidence"]["paths"])
+
+    def test_canonical_nested_relations_inherit_only_when_absent(self):
+        inherited = validate_leakage(self.canonical_index(series_study=None), self.plan,
+                                    assignments={"st1": "fold_0"})
+        self.assertTrue(inherited.passed)
+        conflicting = self.canonical_index({"SOPInstanceUID": "sop1", "PatientID": "other",
+                                           "SeriesInstanceUID": "other-series"})
+        report = validate_leakage(conflicting, self.plan, assignments={"st1": "fold_0"})
+        kinds = {issue.type for issue in report.issues}
+        self.assertIn(LeakageIssueType.CONFLICTING_PATIENT_ID, kinds)
+        self.assertIn(LeakageIssueType.SLICE_SERIES_MISMATCH, kinds)
+        wrong_study = validate_leakage(self.canonical_index(series_study="other-study"), self.plan,
+                                     assignments={"p1": "fold_0"})
+        self.assertIn(LeakageIssueType.SERIES_STUDY_MISMATCH,
+                      {issue.type for issue in wrong_study.issues})
+
+    def test_canonical_slice_assignments_detect_parent_cross_fold(self):
+        slices = (SliceRecord("a.dcm", 12, {"SOPInstanceUID": "sop1"}),
+                  SliceRecord("b.dcm", 13, {"SOPInstanceUID": "sop2"}))
+        index = DatasetIndex("root", "1", (StudyRecord("st1", "p1",
+                     (SeriesRecord("se1", "st1", slices),)),), (), {"n_studies": 1})
+        report = validate_leakage(index, self.plan,
+                                 assignments={slices[0].slice_id: "fold_0", slices[1].slice_id: "fold_1"})
+        kinds = {issue.type for issue in report.issues}
+        self.assertIn(LeakageIssueType.PATIENT_CROSS_FOLD, kinds)
+        self.assertIn(LeakageIssueType.STUDY_CROSS_FOLD, kinds)
+        self.assertIn(LeakageIssueType.SERIES_CROSS_FOLD, kinds)
+        self.assertNotIn(LeakageIssueType.UNKNOWN_GROUP_ID, kinds)
+
+    def test_canonical_missing_sop_uses_content_id_for_slice_leakage(self):
+        slice_record = SliceRecord("a.dcm", 12, {"SeriesInstanceUID": "se1", "StudyInstanceUID": "st1"})
+        report = validate_split([slice_record], [slice_record])
+        self.assertEqual(1, report.counts["n_slices_checked"])
+        issue = next(issue for issue in report.issues if issue.type == LeakageIssueType.SLICE_CROSS_FOLD)
+        self.assertEqual(slice_record.slice_id, issue.entity_id)
+
+    def test_external_alias_identities_are_included_in_material_fingerprint(self):
+        common = {"StudyInstanceUID": "st1", "SeriesInstanceUID": "se1", "SOPInstanceUID": "sop1",
+                  "split": "train"}
+        first = validate_leakage([{**common, "PatientID": "p1"}])
+        second = validate_leakage([{**common, "PatientID": "p2"}])
+        self.assertTrue(first.passed and second.passed)
+        self.assertNotEqual(first.input_material_sha256, second.input_material_sha256)
+
+    def test_latest_dataset_version_serialization_loads_in_validator(self):
+        version = DatasetVersion("dataset", "v1", "a" * 64, "prep-v1", TARGETS)
+        report = validate_leakage({"records": [row()], "dataset_version": version.to_dict()})
+        self.assertTrue(report.passed)
+        self.assertEqual(version.dataset_version_id, report.dataset_version_id)
 
     def test_same_patient_cross_fold_fails(self):
         r = validate_leakage([row(study="s1", sop="1"), row(study="s2", sop="2", fold="fold_1")], self.plan)
@@ -132,7 +233,7 @@ class LeakageTests(unittest.TestCase):
 
     def test_dataset_version_and_index_artifact_binding(self):
         index = {"records": [row()], "dataset_index_artifact_id": "f" * 64}
-        version = DatasetVersion("dataset", "v1", "a" * 64, "prep-v1", ("normal",),
+        version = DatasetVersion("dataset", "v1", "a" * 64, "prep-v1", TARGETS,
                                  dataset_index_artifact_id="f" * 64)
         plan = FoldPlan(version.dataset_version_id, "declared", ("fold_0",), 1)
         report = validate_leakage(index, plan, dataset_version=version)
