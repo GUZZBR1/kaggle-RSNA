@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -6,153 +5,76 @@ import tempfile
 import unittest
 
 from rsna.artifacts import JsonArtifactStore
-from rsna.contracts import DatasetVersion
+from rsna.data import DatasetIndex, SeriesRecord, SliceRecord, StudyRecord, load_manifest, save_manifest
 from rsna.inspection.validate import validate_artifact, validate_dataset
 
 
-def manifest():
-    return {"schema_version": 1, "dataset_version_id": "a" * 64,
-            "studies": [{"study_uid": "study", "patient_id": "patient"}],
-            "series": [{"series_uid": "series", "study_uid": "study", "n_slices": 1}],
-            "slices": [{"sop_uid": "slice", "series_uid": "series", "study_uid": "study",
-                        "position": [0, 0, 1], "orientation": [1, 0, 0, 0, 1, 0],
-                        "spacing": [1, 1]}]}
+def make_index(*, duplicate=False, orphan=False, conflict=False, missing_optional=False):
+    metadata = {"SOPInstanceUID": "sop", "StudyInstanceUID": "study", "SeriesInstanceUID": "series",
+                "InstanceNumber": 1, "ImagePositionPatient": [0, 0, 1],
+                "ImageOrientationPatient": [1, 0, 0, 0, 1, 0], "PixelSpacing": [1, 1], "Rows": 10, "Columns": 10}
+    if missing_optional:
+        metadata.pop("ImagePositionPatient")
+    first = SliceRecord("one.dcm", 10, metadata)
+    slices = (first, SliceRecord("two.dcm", 10, dict(metadata))) if duplicate else (first,)
+    if orphan:
+        metadata["StudyInstanceUID"] = "missing-study"
+        first = SliceRecord("one.dcm", 10, metadata)
+        slices = (first,)
+    series = SeriesRecord("series", "missing-study" if orphan else "study", slices)
+    warnings = ("conflicting PatientID values",) if conflict else ()
+    study = StudyRecord("study", "patient", (series,), warnings)
+    stats = {"n_studies": 1, "n_series": 1, "n_slices": len(slices),
+             "duplicate_sop_uid_count": int(duplicate), "invalid_files": 0}
+    return DatasetIndex("root", "test", (study,), (), stats)
 
 
 class ValidationServicesTests(unittest.TestCase):
-    def test_valid_dataset_and_serializable_report(self):
-        report = validate_dataset(manifest())
-        self.assertTrue(report.passed)
+    def test_valid_canonical_dataset_and_serializable_report(self):
+        report = validate_dataset(make_index())
+        self.assertTrue(report.passed, report.to_dict())
         self.assertEqual(0, report.exit_code)
         self.assertEqual(1, report.statistics["slices"])
         self.assertTrue(json.loads(json.dumps(report.to_dict()))["passed"])
 
-    def test_duplicate_uid_fails_even_for_equal_records(self):
-        data = manifest()
-        data["slices"].append(copy.deepcopy(data["slices"][0]))
-        report = validate_dataset(data)
+    def test_duplicate_sop_uid_fails(self):
+        report = validate_dataset(make_index(duplicate=True))
         self.assertEqual(1, report.exit_code)
-        self.assertIn("DUPLICATE_UID", {error.code for error in report.errors})
+        self.assertIn("DUPLICATE_SOP_UID", {error.code for error in report.errors})
 
-    def test_orphan_series_and_slice(self):
-        data = manifest()
-        data["series"][0]["study_uid"] = "unknown"
-        data["slices"][0]["series_uid"] = "unknown"
-        report = validate_dataset(data)
-        self.assertTrue({"ORPHAN_SERIES", "ORPHAN_SLICE"}.issubset({x.code for x in report.errors}))
+    def test_orphan_series_and_slice_and_patient_conflict(self):
+        report = validate_dataset(make_index(orphan=True, conflict=True))
+        self.assertIn("ORPHAN_SERIES", {item.code for item in report.errors})
+        self.assertIn("ORPHAN_SLICE", {item.code for item in report.errors})
+        self.assertIn("CONFLICTING_PATIENT_ID", {item.code for item in report.errors})
 
-    def test_parent_patient_and_study_consistency(self):
-        data = manifest()
-        data["slices"][0].update(patient_id="other-patient", study_uid="other-study")
-        data["studies"].append({"study_uid": "other-study", "patient_id": "patient"})
-        report = validate_dataset(data)
-        self.assertTrue({"PATIENT_MISMATCH", "STUDY_MISMATCH"}.issubset({x.code for x in report.errors}))
-
-    def test_patient_consistency_without_study_table(self):
-        data = {"series": [{"series_uid": "a", "study_uid": "study", "patient_id": "a"},
-                           {"series_uid": "b", "study_uid": "study", "patient_id": "b"}]}
-        self.assertIn("PATIENT_MISMATCH", {x.code for x in validate_dataset(data).errors})
-
-    def test_absent_tables_are_not_counted_or_reported_as_orphans(self):
-        data = {"schema_version": 1, "series": [{"series_uid": "a", "study_uid": "study"}]}
-        report = validate_dataset(data)
+    def test_optional_metadata_warns_but_does_not_fail(self):
+        report = validate_dataset(make_index(missing_optional=True))
         self.assertTrue(report.passed)
-        self.assertEqual({"series": 1}, report.statistics)
+        self.assertIn("MISSING_IMAGEPOSITIONPATIENT", {item.code for item in report.warnings})
+        self.assertEqual(1, validate_dataset(make_index(missing_optional=True), warnings_as_errors=True).exit_code)
 
-    def test_warning_policy(self):
-        data = manifest()
-        del data["slices"][0]["position"]
-        self.assertEqual(0, validate_dataset(data).exit_code)
-        self.assertEqual(1, validate_dataset(data, warnings_as_errors=True).exit_code)
-
-    def test_invalid_schemas_never_crash(self):
-        for data in ([], {}, {"studies": "wrong"}, {"series": [5]},
-                     {"schema_version": True, "studies": []},
-                     {"series": [{"series_uid": [], "study_uid": {}}]},
-                     {"slices": [{"sop_uid": "x", "study_uid": [], "series_uid": [], "warnings": 5}]}):
-            with self.subTest(data=data):
-                self.assertEqual(1, validate_dataset(data).exit_code)
-
-    def test_invalid_metadata_and_hash_format(self):
-        data = manifest()
-        data["slices"][0].update(orientation=[1], sha256="x", rows=True)
-        codes = {x.code for x in validate_dataset(data).errors}
-        self.assertTrue({"INVALID_METADATA", "INVALID_HASH"}.issubset(codes))
-
-    def test_dataset_version_contract_and_binding(self):
-        version = DatasetVersion("test", "v1", "b" * 64, "prep", ("normal",))
-        data = manifest()
-        data["dataset_version"] = version.to_dict()
-        self.assertIn("DATASET_VERSION_MISMATCH", {x.code for x in validate_dataset(data).errors})
-        data["dataset_version_id"] = version.dataset_version_id
-        self.assertTrue(validate_dataset(data).passed)
-        data["slices"][0]["dataset_version_id"] = "c" * 64
-        self.assertFalse(validate_dataset(data).passed)
-
-    def test_declared_slice_count_consistency(self):
-        data = manifest()
-        data["series"][0]["n_slices"] = 2
-        self.assertIn("SLICE_COUNT_MISMATCH", {x.code for x in validate_dataset(data).errors})
-
-    def test_nested_dataset_version_cannot_override_binding(self):
-        data = {"schema_version": 1, "dataset_version_id": "b" * 64, "index": manifest()}
-        self.assertIn("DATASET_VERSION_MISMATCH", {x.code for x in validate_dataset(data).errors})
-        data["schema_version"] = 2
-        self.assertIn("UNSUPPORTED_SCHEMA_VERSION", {x.code for x in validate_dataset(data).errors})
-
-    def test_source_manifest_hash_binding(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source = root / "source.json"
-            source.write_text("{}", encoding="utf-8")
-            sha = hashlib.sha256(source.read_bytes()).hexdigest()
-            version = DatasetVersion("test", "v1", sha, "prep", ("normal",), uri=str(source))
-            data = manifest()
-            data.update(dataset_version=version.to_dict(), dataset_version_id=version.dataset_version_id)
-            self.assertTrue(validate_dataset(data, level="full").passed)
-            source.write_text('{"changed": true}', encoding="utf-8")
-            self.assertIn("HASH_MISMATCH", {x.code for x in validate_dataset(data, level="full").errors})
-
-    def test_missing_corrupt_and_invalid_json_manifest(self):
+    def test_missing_corrupt_and_invalid_schema_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
             self.assertEqual(3, validate_dataset(path).exit_code)
-            for text in ("{", '{"schema_version": NaN}', "\ufffd",
-                         '{"studies": [], "studies": []}'):
-                path.write_text(text, encoding="utf-8")
-                self.assertEqual(3, validate_dataset(path).exit_code)
-            path.write_text("[]", encoding="utf-8")
+            path.write_text("{", encoding="utf-8")
+            self.assertEqual(3, validate_dataset(path).exit_code)
+            path.write_text(json.dumps({"manifest_schema_version": 99}), encoding="utf-8")
             self.assertEqual(1, validate_dataset(path).exit_code)
 
-    def test_full_hashes_references_without_decoding(self):
+    def test_full_checks_referenced_source_files_without_pixel_decode(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            dicom = root / "invalid-but-opaque.dcm"
-            dicom.write_bytes(b"opaque bytes without DICOM structure")
-            data = manifest()
-            data["slices"][0].update(path=dicom.name, sha256=hashlib.sha256(dicom.read_bytes()).hexdigest())
-            self.assertTrue(validate_dataset(data, level="full", dataset_root=root).passed)
-            dicom.write_bytes(b"changed")
-            self.assertTrue(validate_dataset(data, level="basic", dataset_root=root).passed)
-            report = validate_dataset(data, level="full", dataset_root=root)
-            self.assertIn("HASH_MISMATCH", {x.code for x in report.errors})
-            dicom.unlink()
-            self.assertIn("MISSING_REFERENCED_FILE", {x.code for x in validate_dataset(data, level="full", dataset_root=root).errors})
+            (root / "one.dcm").write_bytes(b"opaque DICOM bytes")
+            report = validate_dataset(make_index(), level="full", dataset_root=root)
+            self.assertTrue(report.passed, report.to_dict())
+            self.assertEqual(1, report.statistics["referenced_files_checked"])
+            (root / "one.dcm").unlink()
+            self.assertIn("MISSING_REFERENCED_FILE", {item.code for item in validate_dataset(
+                make_index(), level="full", dataset_root=root).errors})
 
-    def test_external_index_corruption_and_hash(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            path = root / "manifest.json"
-            index = root / "index.json"
-            path.write_text(json.dumps({"schema_version": 1, "index_path": "index.json"}), encoding="utf-8")
-            self.assertEqual(3, validate_dataset(path).exit_code)
-            index.write_text("{", encoding="utf-8")
-            self.assertEqual(3, validate_dataset(path).exit_code)
-            index.write_text(json.dumps(manifest()), encoding="utf-8")
-            path.write_text(json.dumps({"schema_version": 1, "index_path": "index.json", "index_sha256": "f" * 64}), encoding="utf-8")
-            self.assertIn("HASH_MISMATCH", {x.code for x in validate_dataset(path, level="full").errors})
-
-    def test_artifact_reference_integrity(self):
+    def test_artifact_hash_and_schema_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             ref = JsonArtifactStore(root).put_json({"x": 1})
@@ -161,51 +83,71 @@ class ValidationServicesTests(unittest.TestCase):
             self.assertTrue(validate_artifact(path).passed)
             Path(ref.uri).write_text('{"x":2}', encoding="utf-8")
             self.assertIn("HASH_MISMATCH", {x.code for x in validate_artifact(path).errors})
+            path.write_text("{", encoding="utf-8")
+            self.assertEqual(3, validate_artifact(path).exit_code)
 
-    def test_content_addressed_payload_and_class_names_not_paths(self):
+    def test_generic_payload_manifest_references_and_hashes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            ref = JsonArtifactStore(root).put_json({"class_names": ["normal", "abnormal"]})
-            self.assertTrue(validate_artifact(ref.uri).passed)
-            Path(ref.uri).write_text("{}", encoding="utf-8")
-            self.assertIn("HASH_MISMATCH", {x.code for x in validate_artifact(ref.uri).errors})
-
-    def test_generic_payload_manifest(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "payload.bin").write_bytes(b"payload")
+            payload = root / "payload.bin"
+            payload.write_bytes(b"payload")
             sha = hashlib.sha256(b"payload").hexdigest()
             path = root / "manifest.json"
             path.write_text(json.dumps({"schema_version": 1, "artifact_id": sha,
-                                        "payload_path": "payload.bin", "payload_sha256": sha}), encoding="utf-8")
+                "payload_path": "payload.bin", "payload_sha256": sha}), encoding="utf-8")
             self.assertTrue(validate_artifact(root).passed)
-            (root / "payload.bin").write_bytes(b"wrong")
+            payload.write_bytes(b"wrong")
             self.assertFalse(validate_artifact(root).passed)
 
-    def test_artifact_schema_corruption_and_missing_required_field(self):
+    def test_saved_manifest_uses_one_canonical_validation_path(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
-            path.write_text("{", encoding="utf-8")
-            self.assertEqual(3, validate_artifact(path).exit_code)
-            path.write_text(json.dumps({"artifact_id": "a" * 64, "schema_version": 1}), encoding="utf-8")
-            self.assertEqual(1, validate_artifact(path).exit_code)
+            save_manifest(make_index(), path)
+            dataset_report = validate_dataset(path)
+            artifact_report = validate_artifact(path, level="basic")
+            self.assertEqual(dataset_report.to_dict(), artifact_report.to_dict())
+            self.assertNotIn("MISSING_SCHEMA_VERSION", {item.code for item in artifact_report.warnings})
+            self.assertEqual(make_index(), load_manifest(path))
 
-    def test_referenced_file_strings(self):
+    def test_canonical_schema_rejects_malformed_nested_records_and_derived_values(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
-            path.write_text(json.dumps({"schema_version": 1, "referenced_files": ["missing.json"]}), encoding="utf-8")
-            self.assertIn("MISSING_REFERENCED_FILE", {x.code for x in validate_artifact(path).errors})
+            mutations = (
+                lambda value: value.update(manifest_schema_version=True),
+                lambda value: value.update(studies={}),
+                lambda value: value["studies"][0].update(series="flat"),
+                lambda value: value["studies"][0]["series"][0].update(n_slices=99),
+                lambda value: value["studies"][0]["series"][0].update(metadata={"Rows": 999}),
+                lambda value: value["studies"][0]["series"][0]["slices"][0].update(file_size=True),
+                lambda value: value.update(statistics={"n_slices": "one"}),
+                lambda value: value["studies"][0].update(study_id=""),
+                lambda value: value.update(warnings=[{"code": "flat-warning"}]),
+            )
+            for mutate in mutations:
+                with self.subTest(mutation=mutate):
+                    save_manifest(make_index(), path)
+                    value = json.loads(path.read_text())
+                    mutate(value)
+                    path.write_text(json.dumps(value))
+                    report = validate_dataset(path)
+                    self.assertEqual(1, report.exit_code, report.to_dict())
+                    self.assertIn("SCHEMA_INVALID", {item.code for item in report.errors})
+                    with self.assertRaises(ValueError):
+                        load_manifest(path)
 
-    def test_invalid_reference_types_and_paths_do_not_crash(self):
+    def test_duplicate_keys_and_nonfinite_json_are_unreadable(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "manifest.json"
-            for reference in ({"path": ["invalid"]}, {"path": "\x00invalid"}, {"path": "http://[invalid"}):
-                path.write_text(json.dumps({"schema_version": 1, "files": [reference]}), encoding="utf-8")
-                self.assertFalse(validate_artifact(path).passed)
+            for text in ('{"manifest_schema_version":1,"manifest_schema_version":1}',
+                         '{"value":NaN}'):
+                path.write_text(text)
+                self.assertEqual(3, validate_dataset(path).exit_code)
+                with self.assertRaises(ValueError):
+                    load_manifest(path)
 
     def test_invalid_level_is_api_usage_error(self):
         with self.assertRaises(ValueError):
-            validate_dataset(manifest(), level="clinical")
+            validate_dataset(make_index(), level="clinical")
 
 
 if __name__ == "__main__":

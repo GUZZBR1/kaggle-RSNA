@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
-import math
 from pathlib import Path
 import re
 from typing import Any
@@ -173,7 +172,7 @@ def _check_file(reference: Mapping[str, Any], base: Path, report: ValidationRepo
         report.error("INVALID_REFERENCE", str(exc), entity)
         return
     if path is None:
-        report.warn("REFERENCE_UNVERIFIED", f"Cannot verify non-local reference: {location}", entity)
+        report.warn("UNVERIFIED", f"Cannot verify non-local reference: {location}", entity)
         return
     report.statistics["referenced_files_checked"] = report.statistics.get("referenced_files_checked", 0) + 1
     try:
@@ -221,189 +220,99 @@ def _references(value: Any, base: Path, report: ValidationReport, entity: str = 
 
 def validate_dataset(index: Any, *, level: str = "basic", dataset_root: str | Path | None = None,
                      warnings_as_errors: bool = False) -> ValidationReport:
-    """Validate a DatasetIndex, manifest mapping, or JSON manifest path.
-
-    Basic checks schema, identifiers, relationships and DatasetVersion bindings.
-    Full additionally streams referenced bytes for SHA-256; it never reads pixels.
-    """
-    from .query import ensure_index, load_dataset_index
+    """Validate canonical Issue 1 DatasetIndex records without decoding pixels."""
+    from ..data import DatasetIndex
+    from ..data.models import index_from_dict
 
     report = _report(level, warnings_as_errors)
-    source = None
-    original = index if isinstance(index, Mapping) else None
-    if isinstance(index, (str, Path)):
-        source = Path(index)
-        if source.is_dir():
-            source /= "manifest.json"
-        parsed = _read_json(source, report)
-        if report.corrupted:
-            return report
-        if not isinstance(parsed, Mapping):
-            report.error("SCHEMA_INVALID", "Dataset manifest must be a JSON object")
-            return report
-        original = parsed
-        if not any(name in parsed for name in ("studies", "series", "slices")):
-            reference = parsed.get("index_path", parsed.get("payload_path"))
-            if reference is None and isinstance(parsed.get("payload"), str):
-                reference = parsed["payload"]
-            if isinstance(reference, str):
-                referenced_path = _reference_path(reference, source.parent)
-                if referenced_path is None:
-                    report.error("SCHEMA_INVALID", "Metadata index must reference a local file")
-                    return report
-                _read_json(referenced_path, report)
-                if report.corrupted:
-                    return report
-        try:
-            index = load_dataset_index(source)
-        except (ValueError, TypeError, OSError) as exc:
-            report.error("SCHEMA_INVALID", str(exc))
-            return report
-    else:
-        try:
-            index = ensure_index(index)
-        except (ValueError, TypeError, AttributeError) as exc:
-            report.error("SCHEMA_INVALID", str(exc))
-            return report
-        source = index.source
-    metadata = index.metadata
-    _version(metadata, report, "dataset")
-    if original is not None:
-        if original.get("schema_version") is not None and original.get("schema_version") != metadata.get("schema_version"):
-            _version(original, report, "manifest")
-        original_id = original.get("dataset_version_id")
-        if original_id is not None and metadata.get("dataset_version_id") is not None:
-            if original_id != metadata["dataset_version_id"]:
-                report.error("DATASET_VERSION_MISMATCH", "Metadata index differs from outer manifest DatasetVersion")
-    present = index.entities_present
-    if not present:
-        report.error("MISSING_ENTITY_TABLES", "Manifest contains no studies, series or slices tables")
-    tables = {name: getattr(index, name) for name in ("studies", "series", "slices")}
-    uid_fields = {"studies": "study_uid", "series": "series_uid", "slices": "sop_uid"}
-    known: dict[str, dict[str, Mapping[str, Any]]] = {}
-    for name, rows in tables.items():
-        if name not in present:
-            continue
-        report.statistics[name] = len(rows)
-        ids = known[name] = {}
-        required = {"studies": ("study_uid",), "series": ("series_uid", "study_uid"),
-                    "slices": ("sop_uid", "series_uid", "study_uid")}[name]
-        for number, row in enumerate(rows):
-            entity = f"{name}[{number}]"
-            for key in required:
-                if not isinstance(row.get(key), str) or not row[key].strip():
-                    report.error("MISSING_REQUIRED_FIELD", f"{key} must be a nonempty string", entity)
-            uid = row.get(uid_fields[name])
-            if isinstance(uid, str) and uid.strip():
-                if uid in ids:
-                    report.error("DUPLICATE_UID", f"Duplicate {uid_fields[name]}: {uid}", entity)
-                else:
-                    ids[uid] = row
-            if name == "slices":
-                for key in ("position", "orientation", "spacing"):
-                    if row.get(key) is None:
-                        report.warn(f"MISSING_{key.upper()}", f"Slice {uid or number} has no {key}", entity)
-            for key in ("sha256", "payload_sha256", "hash"):
-                if row.get(key) is not None and not _is_sha(row[key]):
-                    report.error("INVALID_HASH", f"{key} must be a lowercase SHA-256 digest", entity)
-            for key, length in (("position", 3), ("orientation", 6), ("spacing", 2)):
-                vector = row.get(key)
-                if vector is not None and (not isinstance(vector, (list, tuple)) or len(vector) != length
-                        or any(type(number) not in (int, float) or not math.isfinite(number) for number in vector)):
-                    report.error("INVALID_METADATA", f"{key} must contain {length} finite numbers", entity)
-            for key in ("rows", "columns", "n_slices"):
-                if row.get(key) is not None and (type(row[key]) is not int or row[key] < 0
-                        or key in {"rows", "columns"} and row[key] == 0):
-                    report.error("INVALID_METADATA", f"{key} must be a valid nonnegative integer", entity)
-            warnings = row.get("warnings", []) or []
-            if not isinstance(warnings, (list, tuple)):
-                report.error("SCHEMA_INVALID", "warnings must be a list", entity)
-                warnings = []
-            for warning in warnings:
-                if isinstance(warning, Mapping):
-                    report.warn(str(warning.get("code", "DATA_WARNING")),
-                                str(warning.get("message", warning)), entity)
-                else:
-                    report.warn("DATA_WARNING", str(warning), entity)
-    for name in ("series", "slices"):
-        for number, row in enumerate(tables[name]):
-            entity = f"{name}[{number}]"
-            study_uid = row.get("study_uid")
-            study = known.get("studies", {}).get(study_uid) if isinstance(study_uid, str) else None
-            if "studies" in present and study is None:
-                report.error("ORPHAN_SERIES" if name == "series" else "ORPHAN_SLICE",
-                             f"Unknown parent study: {row.get('study_uid')}", entity)
-            if study and row.get("patient_id") is not None and study.get("patient_id") is not None:
-                if row["patient_id"] != study["patient_id"]:
-                    report.error("PATIENT_MISMATCH", "Patient differs from the parent study", entity)
-            if name == "slices" and "series" in present:
-                series_uid = row.get("series_uid")
-                series = known.get("series", {}).get(series_uid) if isinstance(series_uid, str) else None
-                if series is None:
-                    report.error("ORPHAN_SLICE", f"Unknown parent series: {row.get('series_uid')}", entity)
-                elif series.get("study_uid") != row.get("study_uid"):
-                    report.error("STUDY_MISMATCH", "Slice study differs from the parent series study", entity)
-    if "slices" in present:
-        counts: dict[str, int] = {}
-        for row in tables["slices"]:
-            uid = row.get("series_uid")
-            if isinstance(uid, str):
-                counts[uid] = counts.get(uid, 0) + 1
-        for row in tables["series"]:
-            if type(row.get("n_slices")) is int and isinstance(row.get("series_uid"), str):
-                if row["n_slices"] != counts.get(row["series_uid"], 0):
-                    report.error("SLICE_COUNT_MISMATCH", "Declared slice count differs from indexed slices", row["series_uid"])
-    # Even manifests containing only one table must not assign one Study UID to two patients.
-    patients: dict[str, Any] = {}
-    for name, rows in tables.items():
-        for number, row in enumerate(rows):
-            uid, patient = row.get("study_uid"), row.get("patient_id")
-            if isinstance(uid, str) and patient is not None:
-                if uid in patients and patients[uid] != patient:
-                    report.error("PATIENT_MISMATCH", f"Study {uid} has inconsistent patients", f"{name}[{number}]")
-                patients[uid] = patient
-    version = metadata.get("dataset_version")
-    bound_id = metadata.get("dataset_version_id")
-    if isinstance(version, Mapping):
-        _contract(version, contracts.DatasetVersion, report, "dataset_version")
-        if bound_id is not None and bound_id != version.get("dataset_version_id"):
-            report.error("DATASET_VERSION_MISMATCH", "DatasetVersion differs from manifest binding")
-        bound_id = version.get("dataset_version_id")
-    elif version is not None and not isinstance(version, str):
-        report.error("SCHEMA_INVALID", "dataset_version must be an object or a version string")
-    if bound_id is None:
-        report.warn("MISSING_DATASET_VERSION", "DatasetVersion binding is not declared")
-    elif not _is_sha(bound_id):
-        report.error("INVALID_DATASET_VERSION_ID", "dataset_version_id must be a lowercase SHA-256 digest")
-    for name, rows in tables.items():
-        for number, row in enumerate(rows):
-            if row.get("dataset_version_id") is not None and bound_id is not None:
-                if row["dataset_version_id"] != bound_id:
-                    report.error("DATASET_VERSION_MISMATCH", "Entity DatasetVersion differs from manifest", f"{name}[{number}]")
-    if level == "full":
-        root = dataset_root or metadata.get("dataset_root") or metadata.get("root")
-        base = Path(root) if root is not None else (source.parent if source else Path.cwd())
-        if not base.is_absolute() and source:
-            base = source.parent / base
-        # Check normalized records so aliases such as relative_path are available.
-        for name, rows in tables.items():
-            for number, row in enumerate(rows):
-                _check_file(row, base, report, f"{name}[{number}]")
-        for key in ("files", "referenced_files", "artifacts"):
-            if key in metadata:
-                _references(metadata[key], base, report, key, strings_are_paths=True)
-        for key in ("index_path", "payload_path"):
-            if metadata.get(key) is not None:
-                _check_file({"path": metadata[key], "sha256": metadata.get(
-                    "payload_sha256", metadata.get("index_sha256", metadata.get("sha256")))},
-                    source.parent if source else base, report, key)
-        if isinstance(version, Mapping) and version.get("uri"):
-            _check_file({"uri": version["uri"], "sha256": version.get("source_manifest_sha256")},
-                        source.parent if source else base, report, "dataset_version.source_manifest")
-    else:
-        report.info.append(ValidationIssue("HASH_CHECKS_SKIPPED", "Use full validation to verify referenced file bytes"))
-    return report
+    source: Path | None = None
+    try:
+        if isinstance(index, (str, Path)):
+            source = Path(index)
+            if source.is_dir():
+                source /= "manifest.json"
+            # Parse raw JSON separately so malformed schema versions and duplicate keys are diagnosed.
+            raw = _read_json(source, report)
+            if report.corrupted:
+                return report
+            if not isinstance(raw, Mapping) or type(raw.get("manifest_schema_version")) is not int or raw.get("manifest_schema_version") != 1:
+                report.error("SCHEMA_INVALID", "manifest_schema_version must be integer 1")
+                return report
+            index = index_from_dict(raw)
+        if not isinstance(index, DatasetIndex):
+            raise TypeError("expected canonical rsna.data.DatasetIndex or its manifest path")
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        report.error("SCHEMA_INVALID", str(exc))
+        return report
 
+    report.statistics.update(dict(index.statistics))
+    report.statistics.update({"studies": len(index.studies),
+                              "series": sum(len(study.series) for study in index.studies),
+                              "slices": sum(series.n_slices for study in index.studies for series in study.series)})
+    if not index.studies and index.statistics.get("n_studies") is None:
+        report.warn("UNKNOWN_COUNTS", "Study count is unavailable")
+    sop_uids: set[str] = set()
+    for si, study in enumerate(index.studies):
+        entity = f"studies[{si}]"
+        if not study.study_instance_uid:
+            report.error("MISSING_REQUIRED_FIELD", "StudyInstanceUID is required", entity)
+        if not study.patient_id:
+            report.warn("MISSING_PATIENT_ID", "PatientID is unavailable", entity)
+        if any("conflicting PatientID" in warning for warning in study.warnings):
+            report.error("CONFLICTING_PATIENT_ID", "Study contains conflicting PatientID values", entity)
+        for warning in study.warnings:
+            report.warn("DATA_WARNING", warning, entity)
+        for ri, series in enumerate(study.series):
+            series_entity = f"{entity}.series[{ri}]"
+            if not series.series_instance_uid:
+                report.error("MISSING_REQUIRED_FIELD", "SeriesInstanceUID is required", series_entity)
+            if series.study_instance_uid != study.study_instance_uid:
+                report.error("ORPHAN_SERIES", "Series StudyInstanceUID does not match its Study parent", series_entity)
+            for warning in series.warnings:
+                report.warn("DATA_WARNING", warning, series_entity)
+            for di, item in enumerate(series.slices):
+                slice_entity = f"{series_entity}.slices[{di}]"
+                metadata = item.metadata
+                sop = metadata.get("SOPInstanceUID")
+                if not sop:
+                    report.error("MISSING_REQUIRED_FIELD", "SOPInstanceUID is required", slice_entity)
+                elif sop in sop_uids:
+                    report.error("DUPLICATE_SOP_UID", f"Duplicate SOPInstanceUID: {sop}", slice_entity)
+                else:
+                    sop_uids.add(sop)
+                if metadata.get("StudyInstanceUID") != study.study_instance_uid:
+                    report.error("ORPHAN_SLICE", "Slice StudyInstanceUID does not match its Study parent", slice_entity)
+                if metadata.get("SeriesInstanceUID") != series.series_instance_uid:
+                    report.error("ORPHAN_SLICE", "Slice SeriesInstanceUID does not match its Series parent", slice_entity)
+                for optional in ("ImagePositionPatient", "ImageOrientationPatient", "PixelSpacing", "Rows", "Columns"):
+                    if metadata.get(optional) is None:
+                        report.warn(f"MISSING_{optional.upper()}", f"Optional metadata {optional} is unavailable", slice_entity)
+                for warning in item.warnings:
+                    report.warn("DATA_WARNING", warning, slice_entity)
+                if level == "full":
+                    if dataset_root is None:
+                        report.warn("UNVERIFIED", f"Cannot verify source file without dataset_root: {item.relative_path}", slice_entity)
+                    else:
+                        path = Path(dataset_root) / item.relative_path
+                        report.statistics["referenced_files_checked"] = report.statistics.get("referenced_files_checked", 0) + 1
+                        try:
+                            if not path.is_file():
+                                report.error("MISSING_REFERENCED_FILE", f"Referenced DICOM file does not exist: {path}", slice_entity)
+                        except OSError as exc:
+                            report.error("UNREADABLE_REFERENCE", str(exc), slice_entity)
+                            report.corrupted = True
+    duplicate_count = index.statistics.get("duplicate_sop_uid_count")
+    if duplicate_count is not None and duplicate_count > 0 and not any(item.code == "DUPLICATE_SOP_UID" for item in report.errors):
+        report.error("DUPLICATE_SOP_UID", f"Index reports {duplicate_count} duplicate SOPInstanceUID values")
+    if not index.warnings and not any(study.warnings for study in index.studies):
+        report.info.append(ValidationIssue("NO_INDEX_WARNINGS", "Dataset index has no discovery warnings"))
+    else:
+        for warning in index.warnings:
+            report.warn("INDEX_WARNING", warning)
+    report.warn("MISSING_DATASET_VERSION", "DatasetVersion binding is unavailable in this manifest")
+    if level == "basic":
+        report.info.append(ValidationIssue("HASH_CHECKS_SKIPPED", "Source file checks require full validation and dataset_root"))
+    return report
 
 def validate_artifact(path: str | Path, *, level: str = "full",
                       warnings_as_errors: bool = False) -> ValidationReport:
@@ -418,7 +327,6 @@ def validate_artifact(path: str | Path, *, level: str = "full",
     if not isinstance(value, Mapping):
         report.error("SCHEMA_INVALID", "Artifact manifest must be a JSON object")
         return report
-    _version(value, report, "artifact")
     identity_contracts = (("artifact_id", contracts.ArtifactReference),
                           ("dataset_version_id", contracts.DatasetVersion),
                           ("fold_plan_id", contracts.FoldPlan),
@@ -443,6 +351,7 @@ def validate_artifact(path: str | Path, *, level: str = "full",
         report.statistics.update(dataset_report.statistics)
         report.corrupted = dataset_report.corrupted
     else:
+        _version(value, report, "artifact")
         for key, cls in reversed(identity_contracts):
             if key in value:
                 selected = cls

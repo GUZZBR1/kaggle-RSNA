@@ -16,16 +16,17 @@ from rsna.providers.mock import MockProvider
 
 class FoundationTests(unittest.TestCase):
     def setUp(self):
-        self.dataset = DatasetVersion("dataset", "v1", "a" * 64, "prep-v1", ("normal", "abnormal"))
+        self.dataset = DatasetVersion("dataset", "v1", "a" * 64, "prep-v1",
+                                      ("normal", "abnormal"), synthetic=True)
         self.folds = FoldPlan(self.dataset.dataset_version_id, "declared", ("fold_0", "fold_1"), 21)
         self.candidate = ModelCandidate("baseline-placeholder", {"architecture": "unset"})
         self.spec = ExperimentSpec("test", self.dataset.dataset_version_id,
             self.folds.fold_plan_id, (self.candidate.model_candidate_id,), ("fold_0",),
-            self.dataset.class_names)
+            self.dataset.class_names, synthetic=True)
 
     def test_dataset_and_model_identity_ignore_locations(self):
         elsewhere = DatasetVersion("dataset", "v1", "a" * 64, "prep-v1",
-                                   ("normal", "abnormal"), uri="s3://elsewhere")
+                                   ("normal", "abnormal"), uri="s3://elsewhere", synthetic=True)
         self.assertEqual(self.dataset.dataset_version_id, elsewhere.dataset_version_id)
         self.assertEqual(self.candidate.model_candidate_id,
             ModelCandidate("baseline-placeholder", {"architecture": "unset"},
@@ -70,16 +71,16 @@ class FoundationTests(unittest.TestCase):
         ref = ArtifactReference("c" * 64, "application/json", "mock://predictions", "c" * 64)
         pred = PredictionArtifact(ref, "oof", self.candidate.model_candidate_id,
             self.dataset.dataset_version_id, "d" * 64, self.dataset.class_names, 10,
-            self.folds.fold_plan_id, "fold_0")
+            self.folds.fold_plan_id, "fold_0", synthetic=True)
         auc = {"normal": 0.8, "abnormal": 0.6}
         evaluation = Evaluation(self.spec.experiment_id, self.dataset.dataset_version_id,
             self.candidate.model_candidate_id, (pred.prediction_artifact_id,),
-            self.dataset.class_names, auc, 0.7)
+            self.dataset.class_names, auc, 0.7, synthetic=True)
         self.assertEqual(0.7, evaluation.macro_auc)
         with self.assertRaises(ValueError):
             Evaluation(self.spec.experiment_id, self.dataset.dataset_version_id,
                 self.candidate.model_candidate_id, (pred.prediction_artifact_id,),
-                self.dataset.class_names, auc, 0.8)
+                self.dataset.class_names, auc, 0.8, synthetic=True)
 
     def test_config_cli_and_schemas(self):
         config = tomllib.loads(Path("configs/experiments/smoke.toml").read_text(encoding="utf-8"))

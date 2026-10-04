@@ -7,7 +7,7 @@ name = "kaggle-rsna"
 version = "0.1.0"
 description = "Reproducible experiment foundation for RSNA knee MRI classification"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["pydicom>=2.4"]
 
 [project.scripts]
 kaggle-rsna = "rsna.cli:main"

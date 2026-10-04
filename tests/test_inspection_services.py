@@ -1,141 +1,118 @@
-import json
-from pathlib import Path
 import tempfile
 import unittest
+from pathlib import Path
 
-from rsna.inspection.query import (DatasetIndex, DatasetReadError, EntityNotFoundError,
-                                   inspect_manifest, inspect_series, inspect_slice,
-                                   inspect_study, load_dataset_index, sample_entities)
+from rsna.data import DatasetIndex, SeriesRecord, SliceRecord, StudyRecord, save_manifest
+from rsna.inspection.query import (DatasetReadError, EntityNotFoundError, inspect_manifest,
+                                   inspect_series, inspect_slice, inspect_study, load_dataset_index,
+                                   sample_entities)
 from rsna.inspection.summary import build_dataset_stats, build_dataset_summary
 
 
 def dataset():
-    return {
-        "dataset_id": "synthetic", "dataset_version_id": "v1", "schema_version": "1",
-        "provenance": {"source": "fixture"},
-        "studies": [{"StudyInstanceUID": "study1", "PatientID": "patient1"}],
-        "series": [
-            {"SeriesInstanceUID": "series1", "StudyInstanceUID": "study1", "plane": "sagittal",
-             "Laterality": "right", "SeriesDescription": "T2", "ProtocolName": "knee", "Modality": "MR"},
-            {"SeriesInstanceUID": "series2", "StudyInstanceUID": "study1", "plane": "coronal",
-             "Laterality": "left", "warnings": [{"code": "MISSING_POSITION"}]},
-        ],
-        "slices": [
-            {"SOPInstanceUID": "slice1", "SeriesInstanceUID": "series1", "StudyInstanceUID": "study1",
-             "relative_path": "a.dcm", "InstanceNumber": 1, "Rows": 320, "Columns": 320,
-             "ImagePositionPatient": [0, 0, 0], "PixelSpacing": [0.5, 0.5],
-             "ImageOrientationPatient": [1, 0, 0, 0, 1, 0], "SpacingBetweenSlices": 2.0},
-            {"SOPInstanceUID": "slice2", "SeriesInstanceUID": "series1", "SpacingBetweenSlices": 3.0},
-        ],
-    }
+    one = SliceRecord("a.dcm", 10, {"SOPInstanceUID": "slice1", "StudyInstanceUID": "study1",
+        "SeriesInstanceUID": "series1", "InstanceNumber": 1, "Rows": 320, "Columns": 320,
+        "ImagePositionPatient": [0, 0, 0], "PixelSpacing": [0.5, 0.5],
+        "ImageOrientationPatient": [0, 1, 0, 0, 0, 1], "SeriesDescription": "T2",
+        "ProtocolName": "knee", "Modality": "MR", "Laterality": "L"})
+    two = SliceRecord("b.dcm", 10, {"SOPInstanceUID": "slice2", "StudyInstanceUID": "study1",
+        "SeriesInstanceUID": "series1", "InstanceNumber": 2, "Rows": 320, "Columns": 320,
+        "ImagePositionPatient": [1, 0, 0], "PixelSpacing": [0.5, 0.5],
+        "ImageOrientationPatient": [0, 1, 0, 0, 0, 1], "SeriesDescription": "T2",
+        "ProtocolName": "knee", "Modality": "MR", "Laterality": "L"}, ("MISSING_POSITION",))
+    series = SeriesRecord("series1", "study1", (one, two), ("WARN_SERIES",))
+    study = StudyRecord("study1", "patient1", (series,), ("WARN_STUDY",))
+    return DatasetIndex("root", "test", (study,), ("INDEX_WARNING",),
+                        {"n_studies": 1, "n_series": 1, "n_slices": 2, "invalid_files": 0,
+                         "duplicate_sop_uid_count": 0})
 
 
 class InspectionServiceTests(unittest.TestCase):
-    def test_summary_reports_only_observed_metrics(self):
-        result = build_dataset_summary(dataset())
-        self.assertEqual((1, 2, 2, 1), (result["studies"], result["series"], result["slices"], result["patients"]))
-        self.assertEqual({"coronal": 1, "sagittal": 1}, result["planes"])
-        self.assertEqual({"MISSING_POSITION": 1}, result["warning_frequency"])
-        self.assertNotIn("invalid_files", result)
-        self.assertNotIn("missing_metadata", result)
-        self.assertNotIn("patients", build_dataset_summary({"studies": [{"study_uid": "s"}]}))
-        self.assertNotIn("slices", build_dataset_summary({"dataset_id": "metadata-only"}))
+    def test_summary_reports_canonical_counts_and_known_fields(self):
+        index = dataset()
+        result = build_dataset_summary(index)
+        self.assertEqual((1, 1, 2, 1), (result["studies"], result["series"], result["slices"], result["patients"]))
+        self.assertEqual(index.index_id, result["dataset_index_id"])
+        self.assertEqual("unavailable", result["dataset_version_binding"])
+        self.assertEqual(0, result["invalid_files"])
+        self.assertIn("warnings", result)
 
-    def test_inspection_normalizes_dicom_aliases_and_relationships(self):
-        index = DatasetIndex.from_mapping(dataset())
+    def test_inspection_uses_canonical_entities_and_domain_helpers(self):
+        index = dataset()
         study = inspect_study(index, "study1")
-        self.assertEqual((2, 2), (study["n_series"], study["n_slices"]))
-        self.assertEqual({"source": "fixture"}, study["provenance"])
-        self.assertEqual([[1, 0, 0, 0, 1, 0]], study["orientations"])
-        self.assertEqual(2, inspect_series(index, "series1")["n_slices"])
-        self.assertEqual("T2", inspect_series(index, "series1")["description"])
+        self.assertEqual((1, 2), (study["n_series"], study["n_slices"]))
+        self.assertEqual("patient1", study["patient_id"])
+        series = inspect_series(index, "series1")
+        self.assertEqual(2, series["n_slices"])
+        self.assertEqual("T2", series["SeriesDescription"])
+        self.assertEqual("sagittal", series["orientation"]["plane"])
+        self.assertIn("provenance", series)
         row = inspect_slice(index, "slice1")
-        self.assertEqual("a.dcm", row["path"])
-        self.assertEqual([0.5, 0.5], row["spacing"])
-        self.assertEqual(320, row["rows"])
-        # Repeated inspection must not mutate indexes when inheriting study parents.
-        self.assertEqual(study, inspect_study(index, "study1"))
-        self.assertEqual(1, len(index._slices_by_study["study1"]))
+        self.assertEqual("a.dcm", row["relative_path"])
+        self.assertEqual([0.5, 0.5], row["PixelSpacing"])
+        self.assertEqual(320, row["Rows"])
+        self.assertEqual(index.index_id, inspect_manifest(index)["index_id"])
+        self.assertEqual(study, inspect_study(index, index.studies[0].study_id))
+        self.assertEqual(series, inspect_series(index, index.studies[0].series[0].series_id))
+        self.assertEqual(row, inspect_slice(index, index.studies[0].series[0].slices[0].slice_id))
+        self.assertNotEqual(study["study_instance_uid"], study["study_id"])
+        self.assertNotEqual(series["series_instance_uid"], series["series_id"])
 
-    def test_lookup_not_found_or_duplicate_is_clear(self):
+    def test_saved_manifest_round_trip_reuses_canonical_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            save_manifest(dataset(), path)
+            self.assertEqual(dataset(), load_dataset_index(path))
+            self.assertEqual(build_dataset_summary(dataset()), build_dataset_summary(load_dataset_index(path)))
+
+    def test_filters_keep_content_ids_distinct_when_series_uid_is_reused(self):
+        first = dataset().studies[0]
+        item = SliceRecord("other.dcm", 10, {"SOPInstanceUID": "other", "StudyInstanceUID": "study2",
+            "SeriesInstanceUID": "series1", "ImageOrientationPatient": [1, 0, 0, 0, 1, 0]})
+        second = StudyRecord("study2", "patient2", (SeriesRecord("series1", "study2", (item,)),))
+        index = DatasetIndex("root", "test", (first, second), (), {"n_studies": 2, "n_series": 2, "n_slices": 3})
+        self.assertEqual(1, build_dataset_summary(index, plane="sagittal")["studies"])
+        self.assertEqual(1, build_dataset_stats(index, plane="sagittal")["series_per_study"]["max"])
+        with self.assertRaisesRegex(EntityNotFoundError, "ambiguous"):
+            inspect_series(index, "series1")
+        self.assertEqual("study2", inspect_series(index, second.series[0].series_id)["study_instance_uid"])
+        empty_study = StudyRecord("empty", "p", ())
+        self.assertEqual(1, build_dataset_summary(DatasetIndex("r", "test", (empty_study,), (), {}))["studies"])
+
+    def test_lookup_and_manifest_errors(self):
         with self.assertRaisesRegex(EntityNotFoundError, "was not found"):
             inspect_study(dataset(), "missing")
-        value = dataset()
-        value["series"].append(dict(value["series"][0]))
-        with self.assertRaisesRegex(EntityNotFoundError, "ambiguous"):
-            inspect_series(value, "series1")
-        self.assertEqual(1, build_dataset_summary(value)["duplicate_uids"]["series"])
-
-    def test_geometry_requires_complete_consistent_metadata(self):
-        value = dataset()
-        self.assertNotIn("physical_span_mm", inspect_series(value, "series1"))
-        value["slices"][1].update({"position": [0, 0, 3], "orientation": [1, 0, 0, 0, 1, 0]})
-        series = inspect_series(value, "series1")
-        self.assertEqual(3, series["physical_span_mm"])
-        self.assertEqual(3, series["spacing_stats_mm"]["mean"])
-        value["slices"][1]["orientation"] = [0, 1, 0, 1, 0, 0]
-        self.assertNotIn("physical_span_mm", inspect_series(value, "series1"))
-
-    def test_keyed_and_wrapped_indexes(self):
-        index = DatasetIndex.from_mapping({"dataset_id": "x", "index": {
-            "studies": {"s": {"patient_id": "p"}},
-            "series": {"r": {"study_id": "s", "n_slices": 4}},
-        }})
-        self.assertEqual("s", inspect_study(index, "s")["study_uid"])
-        self.assertEqual(4, inspect_study(index, "s")["n_slices"])
-        manifest = inspect_manifest(index)
-        self.assertNotIn("index", manifest)
-        self.assertEqual({"series": 1, "studies": 1}, manifest["entity_tables"])
-
-    def test_loader_reads_json_metadata_reference_only(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "manifest.json").write_text(json.dumps({"dataset_id": "wrapped", "index_path": "index.json"}), encoding="utf-8")
-            value = dataset()
-            # There are no actual DICOM files, so attempts to load pixels would fail.
-            (root / "index.json").write_text(json.dumps(value), encoding="utf-8")
-            self.assertEqual(2, build_dataset_summary(load_dataset_index(root))["slices"])
-            (root / "manifest.json").write_text("{", encoding="utf-8")
-            with self.assertRaisesRegex(DatasetReadError, "cannot read dataset manifest"):
-                load_dataset_index(root)
-            with self.assertRaisesRegex(DatasetReadError, "cannot read dataset manifest"):
-                load_dataset_index(root / "absent.json")
+            path = Path(directory) / "manifest.json"
+            path.write_text("{", encoding="utf-8")
+            with self.assertRaises(DatasetReadError):
+                load_dataset_index(path)
+            with self.assertRaises(DatasetReadError):
+                load_dataset_index(Path(directory) / "absent.json")
 
-    def test_invalid_tables_rejected(self):
-        for value in ({"studies": "invalid"}, {"series": [False]}, {"slices": {"id": 5}}, []):
-            with self.subTest(value=value), self.assertRaises(DatasetReadError):
-                DatasetIndex.from_mapping(value)
-
-    def test_deterministic_sample_and_filters(self):
-        value = dataset()
-        first = sample_entities(value, count=1, seed=42)
-        self.assertEqual(first, sample_entities(value, count=1, seed=42))
-        value["series"].reverse()
-        self.assertEqual(first, sample_entities(value, count=1, seed=42))
-        filtered = sample_entities(value, plane="SAGITTAL", laterality="RIGHT", count=20)
+    def test_deterministic_sampling_and_domain_filters(self):
+        index = dataset()
+        first = sample_entities(index, count=1, seed=42)
+        self.assertEqual(first, sample_entities(index, count=1, seed=42))
+        filtered = sample_entities(index, laterality="LEFT", count=20)
         self.assertEqual(1, filtered["count"])
-        self.assertEqual("series1", filtered["records"][0]["series_uid"])
-        self.assertEqual(1, sample_entities(value, warning_code="MISSING_POSITION")["count"])
+        self.assertEqual("series1", filtered["records"][0]["series_instance_uid"])
+        filtered = sample_entities(index, warning_code="WARN_SERIES")
+        self.assertEqual(1, filtered["count"])
         with self.assertRaisesRegex(ValueError, "non-negative"):
-            sample_entities(value, count=-1)
+            sample_entities(index, count=-1)
 
-    def test_stats_relationship_counts_and_empty_observations(self):
+    def test_stats_empty_and_observed_relationships(self):
         stats = build_dataset_stats(dataset())
-        self.assertEqual(2.0, stats["series_per_study"]["mean"])
-        self.assertEqual(1.0, stats["slices_per_series"]["p50"])
-        self.assertEqual(2.5, stats["slice_spacing"]["p50"])
-        empty = build_dataset_stats({"studies": [], "series": [], "slices": []})
-        self.assertEqual({"count": 0}, empty["slices_per_series"])
-        self.assertNotIn("slice_spacing", empty)
-        self.assertEqual({}, build_dataset_stats({"dataset_id": "metadata-only"}))
+        self.assertEqual(1.0, stats["series_per_study"]["mean"])
+        self.assertEqual(2.0, stats["slices_per_series"]["p50"])
+        self.assertEqual({"series_per_study": {"count": 0}, "slices_per_series": {"count": 0}}, build_dataset_stats(DatasetIndex("e", "test", (), (), {"n_studies": 0, "n_series": 0})))
 
-    def test_summary_filter_drops_global_counts(self):
-        value = dataset()
-        value["statistics"] = {"series": 2000, "invalid_files": 15}
-        result = build_dataset_summary(value, plane="coronal")
-        self.assertEqual((1, 1, 0), (result["studies"], result["series"], result["slices"]))
-        self.assertNotIn("invalid_files", result)
-        self.assertEqual(0, build_dataset_stats(value, plane="coronal")["slices_per_series"]["max"])
+    def test_filtered_summary_omits_global_counts(self):
+        result = build_dataset_summary(dataset(), plane="sagittal")
+        self.assertEqual((1, 1, 2), (result["studies"], result["series"], result["slices"]))
+        self.assertNotIn("invalid_files", build_dataset_summary(
+            DatasetIndex("r", "test", dataset().studies, (), {"invalid_files": 15}), plane="coronal"))
 
 
 if __name__ == "__main__":
