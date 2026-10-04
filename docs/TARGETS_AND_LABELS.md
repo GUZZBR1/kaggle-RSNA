@@ -80,6 +80,11 @@ identity hashes. Dataset identity also includes target schema version.
 the updated DatasetVersion, PredictionArtifact, Evaluation, and
 SubmissionArtifact schemas describe these serialized contracts.
 
+The target-registry schema describes the persisted official registry snapshot,
+including names, positions, and aliases. `TargetRegistry` can still construct
+custom runtime registries for isolated use, but those are not valid official
+registry artifacts.
+
 ## Schema/runtime boundary
 
 Schemas enforce JSON-expressible invariants including official target order,

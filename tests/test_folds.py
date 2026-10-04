@@ -11,7 +11,7 @@ from rsna.cli import main
 from rsna.folds import generate_fold_plan, load_fold_plan, save_fold_plan
 from rsna.folds.validate import validate_leakage
 from rsna.data.models import DatasetIndex, SeriesRecord, SliceRecord, StudyRecord
-from rsna.labels import LabelRecord
+from rsna.labels import LabelRecord, StudyDatasetRecord, StudyMetadata
 from rsna.targets import TARGETS, TARGET_REGISTRY_ID
 
 
@@ -58,6 +58,33 @@ class FoldPlanTests(unittest.TestCase):
             generate_fold_plan([{"study_id": "a" * 64}], n_folds=2)
         with self.assertRaisesRegex(ValueError, "duplicate label records"):
             generate_fold_plan(dataset, n_folds=2, labels=[labels[0], labels[0]])
+
+    def test_content_change_keeps_uid_label_link_and_changes_lineage(self):
+        uid = "1.2.3.4"
+        series_a = SeriesRecord("1.2.3.5", uid, ())
+        series_b = SeriesRecord("1.2.3.6", uid, ())
+        study_a = StudyRecord(uid, "patient-a", (series_a,))
+        study_b = StudyRecord(uid, "patient-a", (series_b,))
+        sibling = StudyRecord("1.2.3.9", "patient-b", ())
+        self.assertNotEqual(study_a.study_id, study_b.study_id)
+        label = LabelRecord(uid, dict.fromkeys(TARGETS, 1), "official_gold")
+        linked_a = StudyDatasetRecord(StudyMetadata.from_study_record(study_a), label, "a" * 64)
+        linked_b = StudyDatasetRecord(StudyMetadata.from_study_record(study_b), label, "a" * 64)
+        self.assertEqual(uid, linked_a.study.study_id)
+        self.assertEqual(uid, linked_b.labels.study_id)
+        self.assertEqual(linked_a.labels.record_id, linked_b.labels.record_id)
+        self.assertNotEqual(linked_a.record_id, linked_b.record_id)
+
+        index_a = DatasetIndex("root-a", "1", (study_a, sibling), (), {"n_studies": 2})
+        index_b = DatasetIndex("root-b", "1", (study_b, sibling), (), {"n_studies": 2})
+        label_sibling = LabelRecord(sibling.study_instance_uid, dict.fromkeys(TARGETS, 0), "official_gold")
+        plan_a = generate_fold_plan(index_a, n_folds=2, labels=[label, label_sibling])
+        plan_b = generate_fold_plan(index_b, n_folds=2, labels=[label, label_sibling])
+        self.assertIn(uid, plan_a.assignments)
+        self.assertIn(uid, plan_b.assignments)
+        self.assertNotEqual(index_a.index_id, index_b.index_id)
+        self.assertNotEqual(plan_a.provenance["dataset_fingerprint"],
+                            plan_b.provenance["dataset_fingerprint"])
 
     def test_dataset_index_identity_mismatch_is_rejected_even_when_studies_match(self):
         studies_a = tuple(StudyRecord(f"study_{i}", f"patient_{i}", ()) for i in range(5))
