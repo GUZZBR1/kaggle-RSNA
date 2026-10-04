@@ -50,19 +50,43 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
         self.assertEqual(baseline["target_schema_id"], changed["target_schema_id"])
 
     def test_failure_injections_are_detected(self) -> None:
+        expected_detection = {
+            "patient-leakage": "blocked by LeakageGuard",
+            "duplicate-sop": "duplicate SOPInstanceUID detected",
+            "orientation-conflict": "orientation and laterality conflicts detected",
+            "missing-position": "physical-span fallback warning recorded",
+            "missing-metadata": "missing PixelSpacing metadata detected",
+            "spacing-irregular": "irregular physical slice spacing detected",
+            "corrupted-cache": "cache validation rejected corruption",
+        }
         for injection in ("patient-leakage", "duplicate-sop", "orientation-conflict",
                           "missing-position", "missing-metadata", "spacing-irregular", "corrupted-cache"):
             with self.subTest(injection=injection), tempfile.TemporaryDirectory() as temp:
                 result = self.run_smoke(temp, injection=injection)
+                self.assertNotEqual(result["status"], "READY")
+                self.assertIn(expected_detection[injection], result["detected"])
                 if injection == "missing-position":
                     self.assertEqual(result["status"], "EXPECTED_FAILURE")
                     self.assertIn("fallback", result["detected"])
+                    self.assertGreater(result["fallback_series"], 0)
                 else:
                     self.assertEqual(result["status"], "EXPECTED_FAILURE")
                     self.assertEqual(result["injection"], injection)
                     if injection == "patient-leakage":
                         self.assertIn("leakage_report_id", result)
                         self.assertIn("PATIENT_CROSS_FOLD", result["issue_types"])
+                    elif injection == "missing-metadata":
+                        self.assertGreater(result["missing_fields"], 0)
+                    elif injection == "spacing-irregular":
+                        self.assertGreater(result["warning_count"], 0)
+
+    def test_patient_leakage_cannot_emit_ready_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            result = self.run_smoke(temp, injection="patient-leakage")
+            self.assertEqual(result["status"], "EXPECTED_FAILURE")
+            self.assertNotEqual(result["status"], "READY")
+            self.assertIn("PATIENT_CROSS_FOLD", result["issue_types"])
+            self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
 
 
 if __name__ == "__main__":
