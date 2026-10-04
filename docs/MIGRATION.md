@@ -9,6 +9,7 @@ telemetry, and configuration-driven smoke execution remain. The former domain-sp
 workflow and submission packaging have been removed rather than carried forward under new
 names.
 
-No actual model, DICOM pipeline, official class mapping, patient fold assignment, or Kaggle
-notebook is included. The example class names, fold declaration, checkpoint, and metrics are
+No actual model, pixel decoder, official class mapping, patient fold assignment, or Kaggle
+notebook is included. DICOM header discovery and metadata manifests are now available; see
+`docs/DATA_INDEX.md`. The example class names, fold declaration, checkpoint, and metrics are
 explicitly synthetic placeholders.
