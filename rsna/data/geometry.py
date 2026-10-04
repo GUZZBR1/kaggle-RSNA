@@ -423,11 +423,17 @@ def _metadata(item: Any) -> Mapping[str, Any]:
 
 def _slice_id(item: Any) -> str:
     metadata = _metadata(item)
+    if isinstance(item, Mapping):
+        return str(item.get("slice_id") or item.get("relative_path") or
+                   metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
     return str(getattr(item, "slice_id", "") or getattr(item, "relative_path", "") or
                metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
 
 
 def _stable_identifier(item: Any, metadata: Mapping[str, Any]) -> str:
+    if isinstance(item, Mapping):
+        return str(item.get("relative_path") or metadata.get("relative_path") or
+                   metadata.get("SOPInstanceUID") or _slice_id(item))
     return str(getattr(item, "relative_path", "") or metadata.get("relative_path") or
                metadata.get("SOPInstanceUID") or _slice_id(item))
 
