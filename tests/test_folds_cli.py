@@ -194,61 +194,55 @@ class FoldCliTests(unittest.TestCase):
             valid_cli_plan.unlink()
 
         mismatch_manifest = json.loads(json.dumps(valid_manifest))
-        mismatch_manifest["studies"][0]["series"][0]["study_instance_uid"] = "study-B"
+        mismatch_manifest["studies"][0]["series"][0]["study_instance_uid"] = "1.2.3.B"
         mismatch_path = self.root / "hierarchy-mismatch.json"
         mismatch_path.write_text(json.dumps(mismatch_manifest), encoding="utf-8")
-        mismatch_id, mismatch_studies = load_dataset(mismatch_path)
-        self.assertEqual(dataset_id, mismatch_id)
-        self.assertEqual("study-B", mismatch_studies[0]["series"][0]["study_instance_uid"])
-        report = validate(plan, mismatch_id, mismatch_studies)
+        with self.assertRaisesRegex(ValueError, "conflicts with parent StudyInstanceUID"):
+            load_dataset(mismatch_path)
+
+        bad_studies = json.loads(json.dumps(valid_studies))
+        bad_studies[0]["series"][0]["study_instance_uid"] = "1.2.3.B"
+        report = validate(plan, dataset_id, bad_studies)
         self.assertFalse(report["passed"])
         issues = report["leakage"]["issues"]
         mismatch_issues = [issue for issue in issues if issue["type"] == "SERIES_STUDY_MISMATCH"]
         self.assertTrue(mismatch_issues)
-        self.assertIn("study-A", mismatch_issues[0]["related_ids"])
-        self.assertIn("study-B", mismatch_issues[0]["related_ids"])
+        self.assertIn("1.2.3.A", mismatch_issues[0]["related_ids"])
+        self.assertIn("1.2.3.B", mismatch_issues[0]["related_ids"])
+        forwarded = _leakage_records(bad_studies, plan["assignments"])
+        self.assertEqual("1.2.3.B", forwarded[0]["series"][0]["study_instance_uid"])
 
         multiple_manifest = json.loads(json.dumps(valid_manifest))
         multiple_manifest["studies"][0]["series"].append(
-            {"series_instance_uid": "series-A2", "study_instance_uid": "study-B"})
+            {"series_instance_uid": "1.2.3.S3", "study_instance_uid": "1.2.3.B"})
         multiple_path = self.root / "hierarchy-multiple-series-mismatch.json"
         multiple_path.write_text(json.dumps(multiple_manifest), encoding="utf-8")
-        multiple_id, multiple_studies = load_dataset(multiple_path)
-        multiple_report = validate(plan, multiple_id, multiple_studies)
-        self.assertFalse(multiple_report["passed"])
-        self.assertTrue(any(issue["type"] == "SERIES_STUDY_MISMATCH"
-                            and {"study-A", "study-B"}.issubset(issue["related_ids"])
-                            for issue in multiple_report["leakage"]["issues"]))
+        with self.assertRaisesRegex(ValueError, "conflicts with parent StudyInstanceUID"):
+            load_dataset(multiple_path)
 
         cross_manifest = json.loads(json.dumps(valid_manifest))
-        cross_manifest["studies"][0]["series"][0]["study_instance_uid"] = "study-B"
-        cross_manifest["studies"][1]["series"][0]["study_instance_uid"] = "study-A"
+        cross_manifest["studies"][0]["series"][0]["study_instance_uid"] = "1.2.3.B"
+        cross_manifest["studies"][1]["series"][0]["study_instance_uid"] = "1.2.3.A"
         cross_path = self.root / "hierarchy-cross-study-mismatch.json"
         cross_path.write_text(json.dumps(cross_manifest), encoding="utf-8")
-        cross_id, cross_studies = load_dataset(cross_path)
-        cross_report = validate(plan, cross_id, cross_studies)
-        self.assertFalse(cross_report["passed"])
-        cross_issues = [issue for issue in cross_report["leakage"]["issues"]
-                        if issue["type"] == "SERIES_STUDY_MISMATCH"]
-        self.assertEqual(2, len(cross_issues))
-        self.assertTrue(all({"study-A", "study-B"}.issubset(issue["related_ids"])
-                            for issue in cross_issues))
+        with self.assertRaisesRegex(ValueError, "conflicts with parent StudyInstanceUID"):
+            load_dataset(cross_path)
 
         code, output = self.invoke("generate", "--dataset-manifest", mismatch_path,
                                    "--output", self.output, "--n-folds", 2, "--json")
-        self.assertEqual(1, code)
+        self.assertEqual(2, code)
         self.assertFalse(self.output.exists())
-        self.assertFalse(json.loads(output)["passed"])
+        self.assertEqual("", output)
 
         self.output.write_text(json.dumps(plan, indent=2), encoding="utf-8")
         code, output = self.invoke("validate", "--fold-plan", self.output,
                                    "--dataset-manifest", mismatch_path, "--json")
-        self.assertEqual(1, code)
-        self.assertFalse(json.loads(output)["passed"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
         code, output = self.invoke("inspect", "--fold-plan", self.output,
                                    "--dataset-manifest", mismatch_path, "--json")
-        self.assertEqual(1, code)
-        self.assertEqual("failed", json.loads(output)["validation_status"])
+        self.assertEqual(2, code)
+        self.assertEqual("", output)
 
         assignments = self.root / "hierarchy-assignments.csv"
         with assignments.open("w", encoding="utf-8", newline="") as stream:
@@ -260,9 +254,9 @@ class FoldCliTests(unittest.TestCase):
         code, output = self.invoke("import", "--assignments", assignments,
                                    "--dataset-manifest", mismatch_path,
                                    "--output", imported, "--json")
-        self.assertEqual(1, code)
+        self.assertEqual(2, code)
         self.assertFalse(imported.exists())
-        self.assertFalse(json.loads(output)["passed"])
+        self.assertEqual("", output)
 
     def test_generation_delegates_to_canonical_generator_and_json_is_clean(self):
         from rsna.folds import generate_fold_plan as canonical_generate

@@ -94,7 +94,14 @@ def load_dataset(path: str | Path) -> tuple[str, list[dict[str, Any]]]:
                 continue
             current = dict(raw_series)
             current.setdefault("series_id", f"series-fallback:{assignment_id}:{index_in_study}")
-            current.setdefault("study_instance_uid", assignment_id)
+            series_study_uid = current.get("study_instance_uid")
+            if series_study_uid is None:
+                current["study_instance_uid"] = assignment_id
+            elif series_study_uid != assignment_id:
+                series_identity = current.get("series_instance_uid") or current["series_id"]
+                raise ValueError(
+                    f"series {series_identity!r} StudyInstanceUID {series_study_uid!r} "
+                    f"conflicts with parent StudyInstanceUID {assignment_id!r}")
             current_slices = current.get("slices", [])
             current["slices"] = [dict(row) for row in current_slices if isinstance(row, dict)] if isinstance(current_slices, list) else []
             normalized_series.append(current)
