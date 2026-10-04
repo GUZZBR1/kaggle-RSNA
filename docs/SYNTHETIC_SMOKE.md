@@ -29,7 +29,11 @@ old DICOMs cannot mix with a new seed; choose a new directory for each kept run.
 The final JSON reports `status: READY`, material IDs, entity counts, cache behavior, label
 missingness, and named checks. `READY` means the metadata-only dataset artifacts passed
 these infrastructure checks; it does not mean a model has been trained or clinically
-validated.
+validated, scored on Kaggle, or made production-ready. The READY marker is persisted only
+after cache, leakage, serialization, and output-location checks pass. Its artifact records
+the DatasetIndex and DatasetVersion, preprocessing identity, TargetRegistry, FoldPlan,
+LeakageGuard report, seed, and synthetic/preprocessing configuration. Model training,
+clinical validation, Kaggle score, and production readiness are explicitly absent.
 
 ## Scenarios covered
 
