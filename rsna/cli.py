@@ -36,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "data-index":
         return _data_index(argv[1:])
+    if argv and argv[0] == "folds":
+        from .folds import main as folds_main
+        return folds_main(argv[1:])
     parser = argparse.ArgumentParser(prog="kaggle-rsna")
     parser.add_argument("config", help="TOML smoke configuration")
     args = parser.parse_args(argv)

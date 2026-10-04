@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Operational FoldPlan artifact v1",
+  "type": "object",
+  "required": ["schema_version", "dataset_version_id", "strategy", "n_folds", "random_state", "grouping_key", "fold_ids", "assignments", "statistics", "fold_plan_id", "locked"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset_version_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "strategy": {"type": "string", "minLength": 1},
+    "n_folds": {"type": "integer", "minimum": 2},
+    "random_state": {"type": "integer", "minimum": 0},
+    "grouping_key": {"type": "string", "minLength": 1},
+    "fold_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "assignments": {"type": "object", "additionalProperties": {"type": "string"}},
+    "statistics": {"type": "object"},
+    "configuration": {"type": "object"},
+    "assignment_manifest_sha256": {"type": ["string", "null"]},
+    "fold_plan_id": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "locked": {"type": "boolean"}
+  },
+  "additionalProperties": true
+}
