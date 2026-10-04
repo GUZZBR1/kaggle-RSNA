@@ -12,6 +12,7 @@ from typing import Any
 
 from ..contracts import DatasetVersion
 from ..folds import generate_fold_plan, load_fold_plan, save_fold_plan
+from ..folds.cli import load_dataset
 from ..identity import digest
 from ..labels import LabelRecord, StudyDatasetRecord, StudyMetadata
 from ..leakage import (LeakagePolicy, LeakageValidationError,
@@ -27,7 +28,8 @@ from .synthetic import SyntheticConfig, TARGETS, generate_synthetic_dataset
 
 
 INJECTIONS = {"patient-leakage", "duplicate-sop", "orientation-conflict",
-              "missing-position", "missing-metadata", "spacing-irregular", "corrupted-cache"}
+              "missing-position", "missing-metadata", "spacing-irregular", "corrupted-cache",
+              "hierarchy-mismatch"}
 
 
 def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
@@ -64,6 +66,24 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     if index.index_id != cold.index.index_id:
         raise AssertionError("cold and warm index identities differ")
     save_manifest(index, root / "index" / "manifest.json")
+    if injection == "hierarchy-mismatch":
+        studies = [study.to_dict() for study in index.studies]
+        if len(studies) < 2 or not studies[0]["series"]:
+            raise AssertionError("hierarchy mismatch injection needs multiple studies and a series")
+        parent_uid = studies[0]["study_instance_uid"]
+        conflicting_uid = studies[1]["study_instance_uid"]
+        studies[0]["series"][0]["study_instance_uid"] = conflicting_uid
+        mismatch_path = root / "index" / "hierarchy-mismatch.json"
+        _write_json(mismatch_path, {"studies": studies})
+        try:
+            load_dataset(mismatch_path)
+        except ValueError as exc:
+            if "conflicts with parent StudyInstanceUID" not in str(exc):
+                raise AssertionError("hierarchy mismatch failed for an unexpected reason") from exc
+            return _injected_summary(root, generated, injection,
+                "Fold CLI rejected Series StudyInstanceUID parent mismatch",
+                details={"parent_study_uid": parent_uid, "declared_study_uid": conflicting_uid})
+        raise AssertionError("Fold CLI accepted a Series StudyInstanceUID parent mismatch")
     target_rows = _load_targets(raw / "targets.csv")
     index_uids = {study.study_instance_uid for study in index.studies if study.study_instance_uid}
     if set(target_rows) != index_uids:
