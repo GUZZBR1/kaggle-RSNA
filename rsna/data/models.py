@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from ..identity import digest, freeze_json, jsonable
@@ -116,6 +117,10 @@ class DatasetIndex:
     statistics: Mapping[str, int]
     metadata_files: tuple[str, ...] = ()
     index_id: str = ""
+    _study_lookup: Mapping[str, StudyRecord] = field(init=False, repr=False, compare=False)
+    _series_lookup: Mapping[str, tuple[SeriesRecord, ...]] = field(init=False, repr=False, compare=False)
+    _path_lookup: Mapping[str, SliceRecord] = field(init=False, repr=False, compare=False)
+    _sop_lookup: Mapping[str, tuple[SliceRecord, ...]] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         studies = tuple(sorted(self.studies, key=lambda item: item.study_id))
@@ -123,6 +128,23 @@ class DatasetIndex:
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "statistics", freeze_json(self.statistics))
         object.__setattr__(self, "metadata_files", tuple(sorted(self.metadata_files)))
+        study_lookup = {s.study_instance_uid: s for s in studies if s.study_instance_uid}
+        series_lookup: dict[str, list[SeriesRecord]] = {}
+        path_lookup = {}
+        sop_lookup: dict[str, list[SliceRecord]] = {}
+        for study in studies:
+            for series in study.series:
+                if series.series_instance_uid:
+                    series_lookup.setdefault(series.series_instance_uid, []).append(series)
+                for item in series.slices:
+                    path_lookup[item.relative_path] = item
+                    sop = item.metadata.get("SOPInstanceUID")
+                    if sop:
+                        sop_lookup.setdefault(str(sop), []).append(item)
+        object.__setattr__(self, "_study_lookup", MappingProxyType(study_lookup))
+        object.__setattr__(self, "_series_lookup", MappingProxyType({k: tuple(v) for k, v in series_lookup.items()}))
+        object.__setattr__(self, "_path_lookup", MappingProxyType(path_lookup))
+        object.__setattr__(self, "_sop_lookup", MappingProxyType({k: tuple(v) for k, v in sop_lookup.items()}))
         expected = digest({"root_identity": self.root_identity, "discovery_version": self.discovery_version,
                            "study_ids": [item.study_id for item in studies], "warnings": self.warnings,
                            "statistics": self.statistics, "metadata_files": self.metadata_files})
@@ -136,6 +158,18 @@ class DatasetIndex:
                 "warnings": list(self.warnings), "statistics": jsonable(self.statistics),
                 "metadata_files": list(self.metadata_files),
                 "index_id": self.index_id}
+
+    def study_by_uid(self, uid: str) -> StudyRecord | None:
+        return self._study_lookup.get(uid)
+
+    def series_by_uid(self, uid: str) -> tuple[SeriesRecord, ...]:
+        return self._series_lookup.get(uid, ())
+
+    def slice_by_path(self, relative_path: str) -> SliceRecord | None:
+        return self._path_lookup.get(relative_path)
+
+    def slices_by_sop_uid(self, uid: str) -> tuple[SliceRecord, ...]:
+        return self._sop_lookup.get(uid, ())
 
 
 def index_from_dict(data: dict[str, Any]) -> DatasetIndex:
