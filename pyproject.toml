@@ -16,5 +16,13 @@ kaggle-rsna = "rsna.cli:main"
 ray = ["ray>=2.40"]
 training = ["numpy>=1.26", "torch>=2.4"]
 
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.setuptools.packages.find]
 include = ["rsna*"]
