@@ -14,9 +14,9 @@ build/
 dist/
 *.egg-info/
 .tmp/
-artifacts/
-outputs/
-checkpoints/
-datasets/
+/artifacts/
+/outputs/
+/checkpoints/
+/datasets/
 *.sqlite3
 *.db

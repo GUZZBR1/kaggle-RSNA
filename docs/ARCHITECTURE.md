@@ -1,58 +1,36 @@
 # Architecture
 
-## First execution path
+This repository is a foundation for the RSNA Knee Abnormality Detection competition, a
+multi-class MRI classification workflow and removes the unrelated prior domain.
+No model architecture, DICOM reader, real fold generation, heavy training, or Kaggle
+notebook is implemented here.
 
-`ExperimentSpec -> Candidate -> Provider -> SimulationJob -> SimulationResult -> Evaluation -> Artifact`
-
-The core records are immutable dataclasses with schema versions and SHA-256 identities.
-`ExperimentSpec` determines the planned jobs; each job includes candidate, opponent, seed,
-seat and simulator version. A provider returns an execution ID and later a result carrying
-both deterministic job identity and provider provenance. Evaluation rejects failed,
-duplicated, unexpected or missing seed/opponent/seat results before writing its artifact.
-
-## Boundaries
-
-- `keigo/contracts.py` defines versioned data contracts and deterministic IDs.
-- `keigo/experiments/` validates, expands and orchestrates experiment jobs.
-- `keigo/candidates/` owns candidate identity. Agent policy source remains an artifact,
-  outside the orchestration core.
-- `keigo/providers/` owns compute submission and result retrieval. `LocalProvider` is for
-  smoke tests; `MockProvider` is deterministic test infrastructure; `RayProvider` connects
-  to an already available Ray runtime; `CloudProvider` adapts an injected cloud transport.
-- `keigo/evaluation/` consumes only declared results. Promotion policy belongs in explicit
-  configuration and will evolve into champion/challenger gates.
-- `keigo/artifacts/` provides content-addressed JSON artifacts for local development.
-  Production deployments should inject an object-store implementation.
-- `keigo/training/` defines the future trainer boundary; GPU training is a workload, not a
-  provider concern.
-- `keigo/tournament/` provides stable ordering for paired seat and opponent workloads.
-- `keigo/telemetry/` stores provider-neutral structured events.
+## Data flow
 
 ```text
-Keigo orchestration
-  -> Provider interface
-       -> Cloud transport -> cloud workers / object storage
-       -> Ray provider -> configured Ray cluster
-       -> Local provider -> short smoke simulation only
+ExperimentSpec -> DatasetVersion -> FoldPlan -> ModelCandidate -> TrainingJob
+  -> CheckpointArtifact -> PredictionArtifact -> Evaluation -> SubmissionArtifact
 ```
 
-No cloud vendor was selected. Credentials, queue names, cluster endpoints and deployment
-scripts therefore stay out of the core. `RayProvider` does not provision or assume a
-particular cluster. Candidate workers never own authoritative experiment state; that
-responsibility belongs to the orchestrator or a future transactional storage adapter.
+Contracts are immutable, schema-versioned records with deterministic SHA-256 identities.
+URIs are locations and do not alter content identities. Dataset manifests and preprocessing
+configuration are identity-bearing. FoldPlan records a reproducible declaration only; it
+does not split patient data. Candidate contracts describe configuration without bundling a
+network implementation.
 
-## Reproducibility and promotion
+`TrainingJob` carries candidate, dataset, fold, CPU/GPU resources, and configuration.
+Providers expose submission and result retrieval: LocalProvider is synchronous and suited
+to smoke tasks; MockProvider is explicitly synthetic; RayProvider uses per-job resource
+requests on an existing Ray runtime; CloudProvider delegates to injected callbacks. None
+assumes a specific cloud vendor or provisions infrastructure.
 
-Candidate, experiment, job, result and artifact IDs are hashes of canonical JSON. A
-candidate change therefore creates a new ID. The candidate artifact content hash is
-identity-bearing; its URI is only a location and can change when copied to cloud storage.
-The experiment declaration pins seed list,
-opponents, simulator version, configuration, evaluation policy and resources. Result
-manifests retain the exact result IDs consumed by evaluation. The fresh seed registry
-starts empty; distributed seed admission must be implemented with transactional shared
-storage before validation seeds are consumed in cloud runs.
+`TrainingResult` records status, metrics, execution/provider provenance, and a bound
+checkpoint on success. `PredictionArtifact` identifies OOF or inference predictions and
+their checkpoint lineage. Evaluation records configurable per-class AUC, macro AUC, and
+future metrics; metric computation is intentionally outside this contract layer.
+`SubmissionBuilder` is only a future interface for producing a SubmissionArtifact.
 
-The first evaluator checks full coverage and aggregates the generic `score` metric. It is
-an infrastructure contract, not a competitive promotion gate. Tournament statistics,
-paired confidence intervals, champion/challenger state and submission gates will be added
-as explicit policies after the official Kaggriculture engine adapter is selected.
+The content-addressed JSON artifact store verifies payload SHA-256 on read. Telemetry is
+provider-neutral. Configuration and artifact schemas are versioned. The smoke config uses
+placeholder class names; replace them with the competition's canonical target labels before
+real experiments.

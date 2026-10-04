@@ -3,14 +3,17 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "keigo-kaggriculture"
+name = "kaggle-rsna"
 version = "0.1.0"
-description = "Cloud-first Kaggriculture experiment and evaluation platform"
+description = "Reproducible experiment foundation for RSNA knee MRI classification"
 requires-python = ">=3.11"
 dependencies = []
+
+[project.scripts]
+kaggle-rsna = "rsna.cli:main"
 
 [project.optional-dependencies]
 ray = ["ray>=2.40"]
 
 [tool.setuptools.packages.find]
-include = ["keigo*", "submission*"]
+include = ["rsna*"]

@@ -1,3 +1,0 @@
-seats = [0, 1]
-seed_policy = "declared-by-experiment"
-opponent_population = "explicit-manifest"

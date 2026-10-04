@@ -1,26 +1,24 @@
-# Keigo Kaggriculture
+# kaggle-RSNA
 
-Cloud-first research infrastructure for candidate generation, Kaggriculture simulations,
-evaluation, tournaments, training and reproducible Kaggle artifacts.
-
-This repository is intentionally a clean foundation. It does not carry forward historical
-agent policies or competition tuning. The first executable path uses an injected local
-runner or a deterministic mock provider; production simulation requires a configured cloud
-or Ray provider and the official environment integration.
+Architecture foundation for the **RSNA Knee Abnormality Detection** MRI classification
+competition. It defines reproducible dataset, fold-plan, model-candidate, training,
+prediction, evaluation, and submission-artifact contracts. It does not include a model,
+DICOM pipeline, real fold assignment, or final Kaggle notebook.
 
 ## Quick start
 
-```bash
-python -m unittest discover -s tests
-python -m keigo configs/experiments/smoke.toml
-```
-
-Python 3.11 or newer is required. The core has no third-party runtime dependencies. Install
-the optional Ray extra only for a Ray cluster:
+Python 3.11 or newer; the core has no runtime dependencies.
 
 ```bash
-pip install -e '.[ray]'
+python -m unittest discover -s tests -v
+python -m rsna configs/experiments/smoke.toml
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for boundaries and [docs/MIGRATION.md](docs/MIGRATION.md)
-for the source audit and migration decisions.
+The CLI uses an explicitly synthetic mock provider. Its checkpoint URI and metrics are
+placeholders for contract smoke tests, not model results. The twelve class labels in the
+example are configurable placeholders and should be replaced with the official labels.
+
+Ray is optional: `pip install -e '.[ray]'`. Cloud and Ray providers adapt injected execution
+boundaries and do not provision or assume a particular vendor or cluster.
+
+See [architecture](docs/ARCHITECTURE.md) and [migration notes](docs/MIGRATION.md).

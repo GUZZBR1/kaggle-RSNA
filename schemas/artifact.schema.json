@@ -1,16 +1,1 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://keigo-kaggriculture/schemas/artifact.schema.json",
-  "title": "Keigo Artifact",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["artifact_id", "media_type", "uri", "sha256", "manifest"],
-  "properties": {
-    "artifact_id": {"$ref": "#/$defs/sha256"},
-    "media_type": {"type": "string", "minLength": 1},
-    "uri": {"type": "string", "minLength": 1},
-    "sha256": {"$ref": "#/$defs/sha256"},
-    "manifest": {"type": "object"}
-  },
-  "$defs": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
-}
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://guzzbr1.github.io/kaggle-rsna/schemas/artifact.schema.json","title":"RSNA Artifact Reference v1","type":"object","additionalProperties":false,"required":["artifact_id","media_type","uri","sha256","manifest","schema_version"],"properties":{"artifact_id":{"$ref":"#/$defs/sha256"},"media_type":{"type":"string","minLength":1},"uri":{"type":"string","minLength":1},"sha256":{"$ref":"#/$defs/sha256"},"manifest":{"type":"object"},"schema_version":{"const":1}},"$defs":{"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}}
