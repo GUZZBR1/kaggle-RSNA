@@ -118,6 +118,20 @@ class DicomGeometryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.order([left, right], GeometryConfig(duplicate_policy="strict"))
 
+    def test_projected_coordinates_stay_aligned_when_mapping_ids_repeat(self):
+        slices = [
+            {"relative_path": "b.dcm", "metadata": {
+                "SOPInstanceUID": "duplicate", "ImagePositionPatient": [0, 0, 10],
+                "ImageOrientationPatient": AXIAL}},
+            {"relative_path": "a.dcm", "metadata": {
+                "SOPInstanceUID": "duplicate", "ImagePositionPatient": [0, 0, 0],
+                "ImageOrientationPatient": AXIAL}},
+        ]
+        result = order_series_slices(slices)
+        self.assertEqual(["a.dcm", "b.dcm"], [item["relative_path"] for item in result.slices])
+        self.assertEqual((0.0, 10.0), result.ordered_positions_mm)
+        self.assertEqual([0.0, 10.0], result.to_dict()["ordered_positions_mm"])
+
     def test_duplicate_policies_and_non_geometry_spacing_metadata(self):
         values = [slice_at(0, instance=1), slice_at(0, instance=2)]
         values[0].metadata.update({"SliceThickness": "2.5", "SpacingBetweenSlices": "3",

@@ -13,10 +13,11 @@ from .contracts import DatasetVersion, ExperimentSpec, FoldPlan, ModelCandidate
 from .data import load_or_refresh, save_manifest
 from .experiments.plan import plan_jobs
 from .experiments.runner import run_jobs
+from .data.geometry import GeometryConfig
+from .data.selection import SliceSelector, SliceSelectionConfig
 from .leakage import LeakagePolicy, validate_leakage
 from .providers.mock import MockProvider
 from .folds import generate_fold_plan, load_fold_plan, save_fold_plan
-from .data.selection import SliceSelector, SliceSelectionConfig
 
 
 def run_config(path: str | Path) -> dict:
@@ -331,15 +332,20 @@ def _select_slices_cli(argv: list[str]) -> int:
     parser.add_argument("--strategy", choices=("uniform", "center", "physical_span"), default="uniform")
     parser.add_argument("--count", required=True, type=int)
     parser.add_argument("--short-series-policy", choices=("keep_all", "repeat_nearest", "pad_reference", "strict"), default="keep_all")
-    parser.add_argument("--physical-position-tolerance-mm", type=float, default=1e-3)
+    parser.add_argument("--duplicate-position-tolerance-mm", "--physical-position-tolerance-mm",
+                        dest="duplicate_position_tolerance_mm", type=float, default=1e-3)
     parser.add_argument("--no-fallback", action="store_true")
     args = parser.parse_args(argv)
     data = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    config = SliceSelectionConfig(args.strategy, args.count, args.short_series_policy,
-                                  args.physical_position_tolerance_mm, not args.no_fallback)
+    config = SliceSelectionConfig(strategy=args.strategy, count=args.count,
+        short_series_policy=args.short_series_policy, allow_fallback=not args.no_fallback,
+        geometry_config=GeometryConfig(duplicate_position_tolerance_mm=args.duplicate_position_tolerance_mm))
     selector = SliceSelector(config)
-    summaries = [selector.select(series).to_dict()
-        for study in data.get("studies", []) for series in study.get("series", [])]
+    summaries = []
+    for study in data.get("studies", []):
+        for series in study.get("series", []):
+            result = selector.select(series, study=study)
+            summaries.append(result.to_dict())
     print(json.dumps({"series_count": len(summaries), "selections": summaries}, indent=2, sort_keys=True))
     return 0
 

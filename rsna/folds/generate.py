@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from ..identity import digest
 from ..labels import LabelRecord
 from ..targets import TARGET_REGISTRY, TARGETS, TARGET_REGISTRY_ID
-from .models import FoldPlanManifest
+from .models import GENERATOR_VERSION, FoldPlanManifest
 from .statistics import summarize
 from .validate import validate_leakage
 
@@ -47,8 +47,7 @@ def generate_fold_plan(dataset: Any, n_folds: int = 5, strategy: str = "group",
     records.sort(key=lambda row: row["study_id"])
     labels = _normalize_labels(labels, set(study_ids))
     if strategy == "multilabel_group_stratified" and not any(
-            value is not None for row in labels.values() for key, value in row.items()
-            if key != "__label_type__"):
+            row.get(target) is not None for row in labels.values() for target in TARGETS):
         raise ValueError("multilabel_group_stratified requires at least one observed label")
 
     group_for_study, group_members, grouping_key = _groups(records)
@@ -73,9 +72,23 @@ def generate_fold_plan(dataset: Any, n_folds: int = 5, strategy: str = "group",
         warnings.append("no study-level labels supplied; multilabel statistics are unavailable")
     warnings.extend(stat_warnings)
     fingerprints = {row["study_id"]: digest({"patient_id": row["patient_id"], "series_ids": row["series_ids"],
-                                               "series_available": row["series_available"]})
+                                               "series_available": row["series_available"],
+                                               "n_slices": row["n_slices"]})
                     for row in records}
+    dataset_fingerprint = _dataset_fingerprint(dataset, records)
+    input_fingerprint = digest({"dataset_fingerprint": dataset_fingerprint, "labels": labels,
+                                "strategy": strategy, "n_folds": n_folds,
+                                "random_state": seed,
+                                "size_deviation_threshold": size_deviation_threshold,
+                                "prevalence_range_threshold": prevalence_range_threshold})
+    provenance = {"generator": "rsna.folds.generate.generate_fold_plan",
+                  "dataset_fingerprint": dataset_fingerprint,
+                  "dataset_index_id": _dataset_index_id(dataset),
+                  "dataset_version_id_explicit": dataset_version_id is not None,
+                  "target_registry_id": TARGET_REGISTRY_ID}
     return FoldPlanManifest(dataset_version_id=identity, strategy=strategy, n_folds=n_folds,
+                            generator_version=GENERATOR_VERSION,
+                            input_fingerprint=input_fingerprint, provenance=provenance,
                             random_state=seed, grouping_key=grouping_key, assignments=assignments,
                             group_assignments=group_folds, study_groups=group_for_study,
                             study_fingerprints=fingerprints,
@@ -115,14 +128,25 @@ def _records(dataset: Any) -> list[dict[str, Any]]:
         if not study_id:
             raise ValueError("every canonical study needs StudyInstanceUID for label linkage")
         series_available = "series" in row or "series_ids" in row
-        series = row.get("series", row.get("series_ids", ())) or ()
+        series = list(row.get("series", row.get("series_ids", ())) or ())
         series_ids = []
         for value in series:
             value = _mapping(value) if not isinstance(value, str) else {"series_instance_uid": value}
             series_ids.append(value.get("series_instance_uid") or value.get("series_id"))
+        slice_counts = []
+        for value in series:
+            mapped = _mapping(value) if not isinstance(value, str) else {}
+            count = mapped.get("n_slices")
+            if type(count) is not int or count < 0:
+                slices = mapped.get("slices")
+                count = len(slices) if isinstance(slices, (list, tuple)) else None
+            slice_counts.append(count)
+        n_slices = (sum(slice_counts) if all(type(count) is int for count in slice_counts)
+                    else None) if series_available else None
         result.append({"study_id": str(study_id).strip(),
                        "patient_id": _clean_id(row.get("patient_id", row.get("PatientID"))),
                        "series_ids": tuple(sorted({str(v).strip() for v in series_ids if v and str(v).strip()})),
+                       "n_slices": n_slices,
                        "series_available": series_available,
                        "warnings": tuple(row.get("warnings", ()))})
     if not result:
@@ -151,6 +175,7 @@ def _groups(records: list[dict[str, Any]]) -> tuple[dict[str, str], dict[str, li
     parents: dict[str, str] = {}
     study_unit: dict[str, str] = {}
     series_owner: dict[str, str] = {}
+    has_cross_unit_series = False
     def find(value: str) -> str:
         parents.setdefault(value, value)
         if parents[value] != value:
@@ -169,6 +194,7 @@ def _groups(records: list[dict[str, Any]]) -> tuple[dict[str, str], dict[str, li
         find(unit)
         for series in row["series_ids"]:
             if series in series_owner:
+                has_cross_unit_series = has_cross_unit_series or unit != series_owner[series]
                 union(unit, series_owner[series])
             else:
                 series_owner[series] = unit
@@ -183,7 +209,10 @@ def _groups(records: list[dict[str, Any]]) -> tuple[dict[str, str], dict[str, li
         groups[key] = sorted(members)
         for study in members:
             study_group[study] = key
-    return study_group, dict(sorted(groups.items())), "patient_id_with_study_fallback" if has_patient else "study_id"
+    grouping_key = "patient_id_with_study_fallback" if has_patient else "study_id"
+    if has_cross_unit_series:
+        grouping_key += "_with_series_uid_linkage"
+    return study_group, dict(sorted(groups.items())), grouping_key
 
 
 def _balanced_group_assignment(groups: Mapping[str, list[str]], n_folds: int, seed: int) -> dict[str, str]:
@@ -245,7 +274,7 @@ def _stratified_group_assignment(groups: Mapping[str, list[str]], records: list[
 
 
 def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | Any | None,
-                      study_ids: set[str]) -> dict[str, dict[str, int | None]]:
+                      study_ids: set[str]) -> dict[str, dict[str, Any]]:
     if labels is None:
         return {}
     if isinstance(labels, (list, tuple)):
@@ -264,7 +293,8 @@ def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | Any | None,
         if isinstance(targets, LabelRecord):
             if targets.study_id != study:
                 raise ValueError(f"label record key {study!r} does not match study {targets.study_id!r}")
-            result[str(study)] = {**dict(targets.values), "__label_type__": targets.label_type}
+            result[str(study)] = {**dict(targets.values), "__label_type__": targets.label_type,
+                                  "__label_provenance__": targets.provenance}
             continue
         if not isinstance(targets, Mapping):
             raise ValueError(f"labels for study {study!r} must be an object")
@@ -286,7 +316,8 @@ def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | Any | None,
                                      allow_soft=targets.get("allow_soft", label_type == "soft"),
                                      target_schema_version=targets.get("target_schema_version", 1),
                                      patient_id=targets.get("patient_id"))
-            result[str(study)] = {**dict(record.values), "__label_type__": record.label_type}
+            result[str(study)] = {**dict(record.values), "__label_type__": record.label_type,
+                                  "__label_provenance__": record.provenance}
             continue
         if label_type != "hard":
             raise ValueError("soft labels must use a serialized LabelRecord with explicit allow_soft opt-in")
@@ -311,9 +342,11 @@ def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | Any | None,
                 raise ValueError(f"label {name!r} for study {study!r} must be 0, 1, or null")
             result[str(study)][canonical] = normalized
         result[str(study)]["__label_type__"] = "hard"
+        result[str(study)]["__label_provenance__"] = targets.get("provenance", "manual_review")
     # Keep official target order in the normalized identity and serialized statistics.
     result = {study: {**{name: values.get(name) for name in TARGETS},
-                      "__label_type__": values["__label_type__"]}
+                      "__label_type__": values["__label_type__"],
+                      "__label_provenance__": values["__label_provenance__"]}
               for study, values in result.items()}
     return result
 
@@ -328,7 +361,28 @@ def _dataset_version_id(dataset: Any, records: list[dict[str, Any]]) -> str:
         version = dataset.get("dataset_version")
         if isinstance(version, Mapping) and version.get("dataset_version_id"):
             return version["dataset_version_id"]
-        identity = dataset.get("index_id", dataset.get("dataset_index_id"))
+        identity = _dataset_index_id(dataset)
     else:
-        identity = getattr(dataset, "index_id", None)
+        identity = _dataset_index_id(dataset)
     return digest({"source": identity, "studies": records})
+
+
+def _dataset_index_id(dataset: Any) -> str | None:
+    if isinstance(dataset, Mapping):
+        identity = dataset.get("index_id", dataset.get("dataset_index_id"))
+        return str(identity) if identity is not None else None
+    identity = getattr(dataset, "index_id", None)
+    return str(identity) if identity is not None else None
+
+
+def _dataset_fingerprint(dataset: Any, records: list[dict[str, Any]]) -> str:
+    """Bind reloads to the source index identity and all fold-relevant records."""
+    source = _dataset_index_id(dataset)
+    if isinstance(dataset, Mapping):
+        source = {"index_id": source,
+                  "dataset_version_id": dataset.get("dataset_version_id"),
+                  "dataset_version": dataset.get("dataset_version")}
+    else:
+        source = {"index_id": source,
+                  "dataset_version_id": getattr(dataset, "dataset_version_id", None)}
+    return digest({"source": source, "studies": sorted(records, key=lambda row: row["study_id"])})
