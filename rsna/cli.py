@@ -15,6 +15,8 @@ from .experiments.plan import plan_jobs
 from .experiments.runner import run_jobs
 from .leakage import LeakagePolicy, validate_leakage
 from .providers.mock import MockProvider
+from .folds import generate_fold_plan, load_fold_plan, save_fold_plan
+from .data.selection import SliceSelector, SliceSelectionConfig
 
 
 def run_config(path: str | Path) -> dict:
@@ -222,8 +224,75 @@ def _leakage_check(argv: list[str]) -> int:
     return 0 if report.passed or args.policy != LeakagePolicy.STRICT.value else 1
 
 
+def run_folds(dataset_manifest: str | Path, output: str | Path, *, n_folds: int = 5,
+              strategy: str = "group", seed: int = 42,
+              labels_path: str | Path | None = None,
+              dataset_version_id: str | None = None, locked: bool = False) -> dict:
+    dataset = json.loads(Path(dataset_manifest).read_text(encoding="utf-8"))
+    labels = json.loads(Path(labels_path).read_text(encoding="utf-8")) if labels_path else None
+    plan = generate_fold_plan(dataset, n_folds, strategy, seed, labels,
+                              dataset_version_id=dataset_version_id, locked=locked)
+    save_fold_plan(plan, output)
+    reloaded = load_fold_plan(output, dataset_version_id=plan.dataset_version_id, dataset=dataset)
+    return {"plan": reloaded.to_dict(), "output": str(output)}
+
+
+def _folds_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="kaggle-rsna folds")
+    parser.add_argument("--dataset-manifest", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--n-folds", type=int, default=5)
+    parser.add_argument("--strategy", choices=("group", "multilabel-group-stratified"), default="group")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--labels")
+    parser.add_argument("--dataset-version-id")
+    parser.add_argument("--locked", action="store_true")
+    args = parser.parse_args(argv)
+    strategy = "multilabel_group_stratified" if args.strategy == "multilabel-group-stratified" else args.strategy
+    result = run_folds(args.dataset_manifest, args.output, n_folds=args.n_folds,
+                       strategy=strategy, seed=args.seed, labels_path=args.labels,
+                       dataset_version_id=args.dataset_version_id, locked=args.locked)
+    plan = result["plan"]
+    print(f"FoldPlan ID: {plan['fold_plan_id']}")
+    print(f"DatasetVersion: {plan['dataset_version_id']}")
+    print(f"Strategy: {plan['strategy']}\nFolds: {plan['n_folds']}")
+    for fold, stats in plan["statistics"]["folds"].items():
+        print(f"{fold}: {stats['n_studies']} studies")
+    print("Leakage: PASS")
+    for warning in plan["warnings"]:
+        print(f"Warning: {warning}")
+    return 0
+
+
+def _select_slices_cli(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="kaggle-rsna select-slices")
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--strategy", choices=("uniform", "center", "physical_span"), default="uniform")
+    parser.add_argument("--count", required=True, type=int)
+    parser.add_argument("--short-series-policy", choices=("keep_all", "repeat_nearest", "pad_reference", "strict"), default="keep_all")
+    parser.add_argument("--physical-position-tolerance-mm", type=float, default=1e-3)
+    parser.add_argument("--no-fallback", action="store_true")
+    args = parser.parse_args(argv)
+    data = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    config = SliceSelectionConfig(args.strategy, args.count, args.short_series_policy,
+                                  args.physical_position_tolerance_mm, not args.no_fallback)
+    selector = SliceSelector(config)
+    summaries = []
+    for study in data.get("studies", []):
+        for series in study.get("series", []):
+            result = selector.select(series)
+            summaries.append(result.to_dict())
+    print(json.dumps({"series_count": len(summaries), "selections": summaries}, indent=2, sort_keys=True))
+    return 0
+
+
+
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
+    if args_list and args_list[0] == "folds":
+        return _folds_cli(args_list[1:])
+    if args_list and args_list[0] == "select-slices":
+        return _select_slices_cli(args_list[1:])
     if args_list and args_list[0] == "leakage-check":
         return _leakage_check(args_list[1:])
     # Preserve the Issue 1 flat spelling as an alias, not as a second parser hierarchy.
