@@ -12,7 +12,6 @@ from typing import Any
 
 from ..contracts import DatasetVersion
 from ..folds import generate_fold_plan, load_fold_plan, save_fold_plan
-from ..folds.cli import load_dataset
 from ..identity import digest
 from ..labels import LabelRecord, StudyDatasetRecord, StudyMetadata
 from ..leakage import (LeakagePolicy, LeakageValidationError,
@@ -67,6 +66,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         raise AssertionError("cold and warm index identities differ")
     save_manifest(index, root / "index" / "manifest.json")
     if injection == "hierarchy-mismatch":
+        from ..folds.cli import load_dataset
+
         studies = [study.to_dict() for study in index.studies]
         if len(studies) < 2 or not studies[0]["series"]:
             raise AssertionError("hierarchy mismatch injection needs multiple studies and a series")

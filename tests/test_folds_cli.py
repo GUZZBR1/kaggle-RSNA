@@ -70,6 +70,12 @@ class FoldCliTests(unittest.TestCase):
         self.assertEqual(0, self.invoke("stats", "--fold-plan", self.output,
                                         "--dataset-manifest", self.dataset, "--json")[0])
 
+    def test_fold_cli_module_import_has_no_data_package_cycle(self):
+        result = subprocess.run([sys.executable, "-c", "from rsna.folds.cli import load_dataset"],
+                                cwd=Path(__file__).resolve().parents[1],
+                                text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_dry_run_and_overwrite_protection(self):
         code, output = self.generate("--dry-run", "--json")
         self.assertEqual(0, code)
