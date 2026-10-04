@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -103,12 +104,34 @@ class DatasetIndexTests(unittest.TestCase):
             root = Path(tmp) / "input"
             output = Path(tmp) / "output"
             write_dicom(root / "s" / "r" / "1.dcm", sop="1.2.555")
-            result = subprocess.run([sys.executable, "-m", "rsna", "data-index",
-                "--input", str(root), "--output", str(output)], check=True, capture_output=True, text=True)
-            self.assertIn("Studies: 1, Series: 1, Slices: 1", result.stdout)
-            self.assertEqual(1, result.stdout.count("Studies:"))
+            write_dicom(root / "s" / "r" / "2.dcm", sop="1.2.556")
+            indexed = subprocess.run([sys.executable, "-m", "rsna", "data-index",
+                "--input", str(root), "--output", str(output), "--json"], check=True, capture_output=True, text=True)
+            index_payload = json.loads(indexed.stdout)
             self.assertTrue((output / "manifest.json").is_file())
-            self.assertEqual(discover_dataset(root).index_id, load_manifest(output / "manifest.json").index_id)
+            index = load_manifest(output / "manifest.json")
+            self.assertEqual(index.index_id, index_payload["dataset_index_id"])
+            self.assertNotIn("PixelData", index.studies[0].series[0].slices[0].metadata)
+            self.assertEqual(index.index_id, discover_dataset(root).index_id)
+
+            def cli(*args):
+                result = subprocess.run([sys.executable, "-m", "rsna", *map(str, args)], capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stderr)
+                return json.loads(result.stdout)
+
+            manifest = output / "manifest.json"
+            summary = cli("data", "summary", "--manifest", manifest, "--json")
+            self.assertEqual((1, 1, 2), (summary["studies"], summary["series"], summary["slices"]))
+            study = index.studies[0]
+            series = study.series[0]
+            sop = series.slices[0].metadata["SOPInstanceUID"]
+            self.assertEqual(2, cli("data", "inspect-study", "--manifest", manifest,
+                                    "--study-id", study.study_instance_uid, "--json")["n_slices"])
+            self.assertEqual(2, cli("data", "inspect-series", "--manifest", manifest,
+                                    "--series-id", series.series_instance_uid, "--json")["n_slices"])
+            self.assertEqual("1.2.555", cli("data", "inspect-slice", "--manifest", manifest,
+                                            "--sop-id", sop, "--json")["SOPInstanceUID"])
+            self.assertTrue(cli("data", "validate", "--manifest", manifest, "--json")["passed"])
 
     def test_manifest_and_ids_are_deterministic_and_root_move_independent(self):
         with tempfile.TemporaryDirectory() as tmp:
