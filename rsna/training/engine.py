@@ -123,11 +123,14 @@ class TrainingEngine:
             scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled and device.type == "cuda"
                                           and amp_dtype == torch.float16)
             state = {"epoch": 0, "cursor": 0, "order": None, "global_step": 0,
-                     "history": [], "train_loss_sum": 0.0, "train_label_count": 0}
+                     "history": [], "step_timings_seconds": [], "elapsed_seconds": 0.0,
+                     "train_loss_sum": 0.0, "train_label_count": 0}
             if resume_from is not None:
                 phase = "resume"
                 state, latest_checkpoint = self._load_checkpoint(
                     torch, np, resume_from, job, model, optimizer, scheduler, scaler, device)
+                state.setdefault("step_timings_seconds", [])
+                state.setdefault("elapsed_seconds", 0.0)
             provenance["resume_from_checkpoint_id"] = latest_checkpoint.checkpoint_id if latest_checkpoint else None
             provenance["effective_batch_size"] = int(config["batch_size"]) * int(config.get("accumulation_steps", 1))
             phase = "training"
@@ -138,6 +141,7 @@ class TrainingEngine:
             clip_norm = config.get("gradient_clip_norm")
             scheduler_interval = config.get("scheduler_interval", "epoch")
             epoch_timings: list[float] = list(state["history"])
+            elapsed_before_run = float(state["elapsed_seconds"])
             total_started = time.perf_counter()
             self._set_device_metrics(torch, device)
 
@@ -161,6 +165,7 @@ class TrainingEngine:
                 epoch_label_count = 0
                 batch_starts = list(range(int(state["cursor"]), len(order), batch_size))
                 for batch_number, start in enumerate(batch_starts):
+                    step_started = time.perf_counter()
                     indices = order[start:start + batch_size]
                     batch = _collate(torch, [fold_data.train[index] for index in indices])
                     inputs, targets, mask = _unpack_batch(
@@ -180,6 +185,7 @@ class TrainingEngine:
                         state["train_loss_sum"] += float(loss_sum.detach().float().cpu().item())
                     pending_batches += 1
                     state["cursor"] = start + len(indices)
+                    state["step_timings_seconds"].append(time.perf_counter() - step_started)
                     flush = pending_batches >= accumulation_steps or batch_number == len(batch_starts) - 1
                     if not flush:
                         continue
@@ -197,6 +203,7 @@ class TrainingEngine:
                     pending_batches = 0
                     pending_labels = 0
                     if (state["global_step"] and int(state["global_step"]) % checkpoint_every == 0):
+                        state["elapsed_seconds"] = elapsed_before_run + time.perf_counter() - total_started
                         latest_checkpoint = self._save_checkpoint(
                             torch, np, job, model, optimizer, scheduler, scaler, state, device)
                         self._emit("training.checkpoint_saved", job,
@@ -204,6 +211,7 @@ class TrainingEngine:
                                     "global_step": state["global_step"]})
                     if (stop_after_optimizer_steps is not None and
                             int(state["global_step"]) >= stop_after_optimizer_steps):
+                        state["elapsed_seconds"] = elapsed_before_run + time.perf_counter() - total_started
                         latest_checkpoint = self._save_checkpoint(
                             torch, np, job, model, optimizer, scheduler, scaler, state, device)
                         raise _Interrupted(latest_checkpoint)
@@ -229,25 +237,34 @@ class TrainingEngine:
                 state["cursor"] = 0
                 state["order"] = None
                 self._emit("training.epoch_finished", job, epoch_record)
+                state["elapsed_seconds"] = elapsed_before_run + time.perf_counter() - total_started
                 latest_checkpoint = self._save_checkpoint(
                     torch, np, job, model, optimizer, scheduler, scaler, state, device)
                 phase = "training"
 
-            wall_seconds = max(time.perf_counter() - total_started, 1e-9)
+            wall_seconds = max(elapsed_before_run + time.perf_counter() - total_started, 1e-9)
             validation_metrics = _evaluate(
                 torch, model, fold_data.validation, batch_size, device, amp_enabled, amp_dtype,
                 target_count=len(self.dataset_version.class_names))
             validation_loss, validation_count = validation_metrics
+            wall_seconds = max(elapsed_before_run + time.perf_counter() - total_started, 1e-9)
+            state["elapsed_seconds"] = wall_seconds
+            latest_checkpoint = self._save_checkpoint(
+                torch, np, job, model, optimizer, scheduler, scaler, state, device)
+            step_timings = list(state["step_timings_seconds"])
             metrics = {"train_loss": (float(state["train_loss_sum"]) /
                                       max(int(state["train_label_count"]), 1)),
                        "global_step": float(state["global_step"]),
                        "validation_observed_labels": float(validation_count),
                        "examples_per_second": float(len(fold_data.train) * max_epochs / wall_seconds),
+                       "step_time_mean_seconds": (sum(step_timings) / len(step_timings)
+                                                   if step_timings else 0.0),
                        "training_seconds": float(wall_seconds)}
             if validation_loss is not None:
                 metrics["validation_loss"] = float(validation_loss)
             peak_memory = self._peak_memory(torch, device)
             provenance.update({"epoch_timings_seconds": epoch_timings,
+                               "step_timings_seconds": step_timings,
                                "peak_memory_bytes": peak_memory,
                                "checkpoint_uri": latest_checkpoint.artifact.uri,
                                "checkpoint_sha256": latest_checkpoint.artifact.sha256,
