@@ -18,5 +18,6 @@ dist/
 /outputs/
 /checkpoints/
 /datasets/
+/synthetic-smoke/
 *.sqlite3
 *.db
