@@ -1,42 +1,231 @@
-# Fold plans
+# Reproducible fold plans
 
-A `FoldPlan` is an experiment input. Reuse the same saved plan for every baseline you intend to compare: results trained on different splits are not directly comparable.
+Fold assignment is a versioned dataset artifact. Generate the plan before comparing
+models, and reuse the same saved file for every experiment in that comparison.
+Changing folds changes the validation population and makes scores incomparable.
 
-## Recommended workflow
+## Identity and grouping
+
+`DatasetVersion` binds a plan to the dataset version. The folds command accepts a
+`dataset_version_id` at the top level or via `--dataset-version-id`; when neither
+exists it derives a stable SHA-256 dataset identity from the manifest's `index_id`
+and canonical study records. PatientID is the preferred indivisible unit. Studies
+without PatientID fall back to study grouping and are called out in warnings. A
+reused SeriesInstanceUID links its studies into one indivisible group. Conflicting
+PatientID values within one study fail closed.
+
+The default `group` algorithm sorts input records canonically, orders larger groups
+first, and places each group in the currently smallest fold. Seeded SHA-256 tie
+breakers make the assignment independent of input order and Python's random module.
+The optional `multilabel_group_stratified` strategy greedily minimizes normalized
+positive and negative mass while keeping whole patient/study groups intact. Labels
+are normalized by the central `TargetRegistry`; target aliases map to canonical names
+and the manifest records the official target order and registry identity. Hard
+`LabelRecord`s accept 0, 1, or missing values. Soft `LabelRecord`s require the
+explicit `allow_soft` opt-in, contribute their probabilities to prevalence and
+stratification, and remain distinguishable in fold statistics and plan identity.
+Missing labels are counted separately and are never imputed. This is an approximation
+and is not enabled by default.
+
+## Lifecycle
 
 ```text
-dataset index
-   ↓
-generate 5-fold
-   ↓
-validate
-   ↓
-inspect stats
-   ↓
-lock
-   ↓
-use the same FoldPlan for every baseline
+DatasetVersion
+      ↓
+group extraction (Patient → Study → Series)
+      ↓
+fold strategy
+      ↓
+assignment manifest + statistics
+      ↓
+leakage validation
+      ↓
+locked FoldPlan for experiment reuse
 ```
 
-Example:
+The manifest's `fold_plan_id` hashes the dataset binding, strategy, seed, grouping,
+actual study and group assignments, statistics, warnings, and lock state. It excludes
+output path, host, and timestamp. Loading verifies this content hash and never
+regenerates assignments. `--locked` makes the saved plan immutable through the save
+API; locked manifests cannot be overwritten with a different plan.
+
+Applying a plan checks DatasetVersion and rejects new studies under the default
+`strict` policy. Missing expected studies are returned as `application_warnings` so
+the caller can see the incomplete dataset. Creating an extension requires generating
+and saving a new plan explicitly.
+
+## CLI
 
 ```bash
-python -m rsna folds generate --dataset-manifest artifacts/dataset-index/manifest.json \
-  --output artifacts/folds/foldplan-v1.json --n-folds 5 --strategy group --seed 42
-python -m rsna folds validate --fold-plan artifacts/folds/foldplan-v1.json \
-  --dataset-manifest artifacts/dataset-index/manifest.json --reproduce
-python -m rsna folds inspect --fold-plan artifacts/folds/foldplan-v1.json --dataset-manifest artifacts/dataset-index/manifest.json
+python -m rsna folds \
+  --dataset-manifest artifacts/dataset-index.json \
+  --output artifacts/folds/folds-v1.json \
+  --n-folds 5 --strategy group --seed 42
+```
+
+When study labels are available, provide a JSON object keyed by study ID whose values
+map canonical target names or registered aliases to `0`, `1`, or `null`, and select
+`--strategy multilabel-group-stratified`. To pass soft labels, use serialized
+`LabelRecord` objects with `label_type: "soft"` and `allow_soft: true`. The report
+includes per-fold and total study, patient, series, and group counts; target positive,
+negative, soft, missing, and prevalence counts; size and prevalence imbalance
+diagnostics; and warnings for rare targets.
+
+
+## Assignment management commands
+
+The extended assignment commands operate on the canonical  used by Issue 6.  delegates to ; persistence and reload use the package manifest APIs. The operational commands add dataset-aware validation, <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+<head>
+<style> body { font-family: sans-serif; } </style>
+<title>Boost Inspection Report</title>
+</head>
+<body>
+<table>
+<tr>
+<td><img src="http://www.boost.org/boost.png" alt="Boost logo" /></td>
+<td>
+<h1>Boost Inspection Report</h1>
+<b>Run Date:</b> 04:24:25 UTC, Sunday 04 October 2026
+</td>
+</tr>
+</table>
+<p>This report is generated by an <a href="http://www.boost.org/tools/inspect/index.html">inspection
+program</a> that checks files for the problems noted below.</p>
+<h2>Totals</h2>
+95 files scanned<br>
+19 directories scanned (including root)<br>
+114 problems reported
+<p>
+<h2>Problem counts</h2>
+<blockquote><p>
+  57 files missing Boost license info or having wrong reference text<br>
+  57 files missing copyright notice<br>
+  0 files with invalid line endings<br>
+  0 files that don't end with a newline<br>
+  0 bookmarks with invalid characters<br>
+  0 duplicate bookmarks<br>
+  0 invalid urls<br>
+  0 broken links<br>
+  0 unlinked files<br>
+  0 file and directory name issues<br>
+  0 files with tabs<br>
+  0 files with non-ASCII chars<br>
+  0 files with Apple macros<br>
+  0 files with a C-style assert macro<br>
+  0 files with a deprecated BOOST macro<br>
+  0 violations of the Boost min/max guidelines<br>
+  0 usages of unnamed namespaces in headers (including .ipp files)<br>
+</blockquote>
+<h2>Worst Offenders</h2>
+<blockquote>
+  <a href="#rsna">rsna</a> (94)<br>
+  <a href="#tests">tests</a> (20)<br>
+</blockquote>
+<h2>Summary</h2>
+<blockquote>
+  <a href="#rsna">rsna</a> (94)<br>
+  <a href="#tests">tests</a> (20)<br>
+</blockquote>
+<h2>Details</h2>
+  *Lic* missing Boost license info, or wrong reference text<br>
+  *C* missing copyright notice<br>
+  *EOL* invalid (cr only) line-ending<br>
+  *END* file doesn't end with a newline<br>
+  *LINK* invalid bookmarks, duplicate bookmarks, invalid urls, broken links, unlinked files<br>
+  *N* file and directory name issues<br>
+  *Tabs* tabs in file<br>
+  *ASCII* non-ASCII chars in file<br>
+  *APPLE-MACROS* calls to Apple's debugging macros in file<br>
+  *ASSERT-MACROS* presence of C-style assert macro in file (use BOOST_ASSERT instead)<br>
+  *DEPRECATED-MACROS* presence of deprecated BOOST macro in file (see docs for replacements)<br>
+  *M* uses of min or max that have not been protected from the min/max macros, or unallowed #undef-s<br>
+  *U* unnamed namespace in header<br>
+
+<p>Directories with a file named "boost-no-inspect" will not be inspected.<br>
+Files containing "boost-no-inspect" will not be inspected.</p>
+
+<h3><a name="rsna">rsna</a></h3>
+<pre>
+rsna/__init__.py: *C*, *Lic*
+rsna/__main__.py: *C*, *Lic*
+rsna/artifacts/__init__.py: *C*, *Lic*
+rsna/artifacts/store.py: *C*, *Lic*
+rsna/cli.py: *C*, *Lic*
+rsna/contracts.py: *C*, *Lic*
+rsna/data/__init__.py: *C*, *Lic*
+rsna/data/cache.py: *C*, *Lic*
+rsna/data/dicom.py: *C*, *Lic*
+rsna/data/geometry.py: *C*, *Lic*
+rsna/data/index.py: *C*, *Lic*
+rsna/data/laterality.py: *C*, *Lic*
+rsna/data/manifest.py: *C*, *Lic*
+rsna/data/models.py: *C*, *Lic*
+rsna/data/normalization.py: *C*, *Lic*
+rsna/data/orientation.py: *C*, *Lic*
+rsna/data/provenance.py: *C*, *Lic*
+rsna/data/selection.py: *C*, *Lic*
+rsna/evaluation/__init__.py: *C*, *Lic*
+rsna/evaluation/evaluate.py: *C*, *Lic*
+rsna/experiments/__init__.py: *C*, *Lic*
+rsna/experiments/plan.py: *C*, *Lic*
+rsna/experiments/runner.py: *C*, *Lic*
+rsna/folds.py: *C*, *Lic*
+rsna/folds/__init__.py: *C*, *Lic*
+rsna/folds/generate.py: *C*, *Lic*
+rsna/folds/manifest.py: *C*, *Lic*
+rsna/folds/models.py: *C*, *Lic*
+rsna/folds/statistics.py: *C*, *Lic*
+rsna/folds/validate.py: *C*, *Lic*
+rsna/identity.py: *C*, *Lic*
+rsna/labels.py: *C*, *Lic*
+rsna/leakage/__init__.py: *C*, *Lic*
+rsna/leakage/duplicates.py: *C*, *Lic*
+rsna/leakage/types.py: *C*, *Lic*
+rsna/leakage/validator.py: *C*, *Lic*
+rsna/providers/__init__.py: *C*, *Lic*
+rsna/providers/base.py: *C*, *Lic*
+rsna/providers/cloud.py: *C*, *Lic*
+rsna/providers/local.py: *C*, *Lic*
+rsna/providers/mock.py: *C*, *Lic*
+rsna/providers/ray.py: *C*, *Lic*
+rsna/submission.py: *C*, *Lic*
+rsna/targets.py: *C*, *Lic*
+rsna/telemetry/__init__.py: *C*, *Lic*
+rsna/telemetry/events.py: *C*, *Lic*
+rsna/training/__init__.py: *C*, *Lic*</pre>
+
+<h3><a name="tests">tests</a></h3>
+<pre>
+tests/test_data_index.py: *C*, *Lic*
+tests/test_dataset_index_cache.py: *C*, *Lic*
+tests/test_dicom_geometry.py: *C*, *Lic*
+tests/test_folds.py: *C*, *Lic*
+tests/test_folds_cli.py: *C*, *Lic*
+tests/test_foundation.py: *C*, *Lic*
+tests/test_leakage.py: *C*, *Lic*
+tests/test_orientation_laterality.py: *C*, *Lic*
+tests/test_slice_selection.py: *C*, *Lic*
+tests/test_targets_labels.py: *C*, *Lic*</pre>
+</body>
+</html>, , , CSV/JSON export, CSV import, and locking without defining another plan model or artifact schema.
+
+
+
+Imported CSV assignments are rebuilt as a , including group assignments, study fingerprints, statistics, and Issue 6 identity fields. Validation calls the Issue 7  on canonical index records; the lighter structural checks remain for index-only mappings that do not carry the canonical relationships. Lock state is part of the manifest identity.
+
+## Assignment management commands
+
+The extended assignment commands operate on the canonical `FoldPlanManifest` from Issue 6. `generate` delegates to `rsna.folds.generate_fold_plan`; persistence and reload use the package manifest APIs. The commands add dataset-aware validation, `inspect`, `stats`, `diff`, CSV/JSON export, CSV import, and locking without defining a second plan model or artifact schema.
+
+```bash
+python -m rsna folds generate --dataset-manifest artifacts/dataset-index/manifest.json --output artifacts/folds/foldplan-v1.json --n-folds 5 --strategy group --seed 42
+python -m rsna folds validate --fold-plan artifacts/folds/foldplan-v1.json --dataset-manifest artifacts/dataset-index/manifest.json --reproduce
+python -m rsna folds inspect --fold-plan artifacts/folds/foldplan-v1.json --fold fold_0
+python -m rsna folds stats --fold-plan artifacts/folds/foldplan-v1.json --dataset-manifest artifacts/dataset-index/manifest.json
+python -m rsna folds export --fold-plan artifacts/folds/foldplan-v1.json --format csv --output artifacts/folds/assignments.csv
 python -m rsna folds lock --fold-plan artifacts/folds/foldplan-v1.json
 ```
 
-Generation refuses to overwrite an existing output. `--force` records an explicit overwrite of an unlocked plan; locked plans refuse overwrite. Dry runs validate and report statistics without writing. The plan identity covers dataset version, strategy, seed, configuration, and assignments, and does not depend on timestamps.
-
-The Issue 8 index-only manifest is accepted without scanning DICOM files. Such a manifest is bound to a deterministic `DatasetVersion` derived from its exact bytes. A manifest wrapper may instead provide a `dataset_version` object (the normal `DatasetVersion` contract) or a `dataset_version_id`. Validation fails when that ID differs from the plan.
-
-Validation checks plan identity/schema, dataset identity, unknown and missing studies, patient leakage, and coverage. Fold statistics include patients, studies, series, slices, and binary label counts when labels are present. Balance reports fold sizes and per-target prevalence ranges and population standard deviations; these interpretable diagnostics are not combined into a quality score. Study assignments imply that each study's series remain together.
-
-Diff reports exact assignment equality and semantic partition equality. Semantic equality treats a consistent permutation of fold labels as the same partition. Imported CSV plans are revalidated against dataset membership and patient leakage before they are saved.
-
-Every command supports `--json`; JSON mode writes one JSON document to stdout and sends errors to stderr. Exit codes: `0` success/valid, `1` validation failure, `2` usage or missing output/conflict, `3` corrupt input/artifact, `4` dataset mismatch.
-
-This CLI manages fold artifacts only. It does not train models, create OOF predictions, tune hyperparameters, augment data, run TTA/ensembles, or create submissions.
+Imported CSV assignments are rebuilt as a `FoldPlanManifest`, including group assignments, study fingerprints, statistics, and Issue 6 identity fields. Validation calls the Issue 7 `Leakage Guard` on canonical index records. Lock state is part of the manifest identity.

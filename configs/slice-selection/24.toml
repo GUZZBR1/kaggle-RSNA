@@ -1,0 +1,6 @@
+[slice_selection]
+strategy = "physical_span"
+count = 24
+short_series_policy = "keep_all"
+physical_position_tolerance_mm = 0.001
+allow_fallback = true

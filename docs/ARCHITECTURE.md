@@ -1,9 +1,8 @@
 # Architecture
 
 This repository is a foundation for the RSNA Knee Abnormality Detection competition, a
-multi-label MRI classification workflow and removes the unrelated prior domain.
-No model architecture, DICOM reader, real fold generation, heavy training, or Kaggle
-notebook is implemented here.
+multi-label MRI classification workflow that removes the unrelated prior domain. No model
+architecture, model training, or Kaggle notebook is implemented here.
 
 The data metadata layer provides deterministic DICOM series ordering from patient-space
 geometry when available. See [DICOM_GEOMETRY.md](DICOM_GEOMETRY.md) for the normal,
@@ -19,9 +18,9 @@ ExperimentSpec -> DatasetVersion -> FoldPlan -> ModelCandidate -> TrainingJob
 
 Contracts are immutable, schema-versioned records with deterministic SHA-256 identities.
 URIs are locations and do not alter content identities. Dataset manifests and preprocessing
-configuration are identity-bearing. FoldPlan records a reproducible declaration only; it
- does not split patient data. Candidate contracts describe configuration without bundling a
-network implementation.
+configuration are identity-bearing. FoldPlan manifests record deterministic assignments,
+validate patient grouping, and persist fold diagnostics; see [FOLDS.md](FOLDS.md). Candidate
+contracts describe configuration without bundling a network implementation.
 
 `TrainingJob` carries candidate, dataset, fold, CPU/GPU resources, and configuration.
 Providers expose submission and result retrieval: LocalProvider is synchronous and suited
