@@ -2,8 +2,13 @@
 
 This repository is a foundation for the RSNA Knee Abnormality Detection competition, a
 multi-class MRI classification workflow and removes the unrelated prior domain.
-No model architecture, DICOM reader, real fold generation, heavy training, or Kaggle
+No model architecture, pixel decoder, real fold generation, heavy training, or Kaggle
 notebook is implemented here.
+
+The data metadata layer provides deterministic DICOM series ordering from patient-space
+geometry when available. See [DICOM_GEOMETRY.md](DICOM_GEOMETRY.md) for the normal,
+projected coordinate, fallbacks, and diagnostics contract. This layer consumes already
+loaded metadata and does not decode pixels.
 
 ## Data flow
 
@@ -34,3 +39,8 @@ The content-addressed JSON artifact store verifies payload SHA-256 on read. Tele
 provider-neutral. Configuration and artifact schemas are versioned. The smoke config uses
 placeholder class names; replace them with the competition's canonical target labels before
 real experiments.
+
+The independent `rsna.data` layer discovers DICOM headers, records Study/Series/Slice
+metadata, writes a deterministic JSON manifest, and orders slices by patient-space
+geometry when available. See [DATA_INDEX.md](DATA_INDEX.md) and
+[DICOM_GEOMETRY.md](DICOM_GEOMETRY.md).
