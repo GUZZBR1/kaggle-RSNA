@@ -51,6 +51,12 @@ class DicomGeometryTests(unittest.TestCase):
         self.assertEqual((0, -1, 0), cross_product(*parse_orientation((1, 0, 0, 0, 0, 1))))
         self.assertEqual(4, project_position("1\\2\\4", (0, 0, 1)))
 
+    def test_reversed_input_is_sorted_ascending_and_reported(self):
+        result = self.order([slice_at(z) for z in (10, 5, 0)])
+        self.assertEqual([0, 5, 10], [item.metadata["ImagePositionPatient"][2]
+                                      for item in result.slices])
+        self.assertTrue(result.reversed)
+
     def test_geometry_order_is_independent_of_input_permutation(self):
         base = [slice_at(z, instance=10 - z) for z in (12, -1, 4, 8, 2)]
         expected = [item.slice_id for item in self.order(base).slices]

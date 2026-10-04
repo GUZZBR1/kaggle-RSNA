@@ -385,7 +385,9 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
         {"consistent": orientation_consistent if valid_normals else None,
          "max_deviation_deg": max_deviation, "tolerance_deg": config.orientation_tolerance_deg},
         tuple(duplicate_positions), spacing_metadata, geometry_warnings)
-    return OrderingResult(ordered, method, confidence, False, geometry_warnings, diag, series_uid)
+    reversed_input = len(order) > 1 and order == list(range(len(slices) - 1, -1, -1))
+    return OrderingResult(ordered, method, confidence, reversed_input,
+                          geometry_warnings, diag, series_uid)
 
 
 def _metadata(item: Any) -> Mapping[str, Any]:

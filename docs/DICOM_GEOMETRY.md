@@ -13,7 +13,8 @@ validates and normalizes their small numeric deviations, then computes
 `normal = row × column`. For each `ImagePositionPatient`, it calculates
 `coordinate = dot(position, normal)`. Slices are always sorted by ascending
 projected patient-space coordinate, independent of input and filename order. The
-normal's direction is preserved, so reversing one direction cosine reverses the
+result's `reversed` flag records when the incoming series was strictly in the opposite
+order from the ascending output. The normal's direction is preserved, so reversing one direction cosine reverses the
 coordinate convention. Row and column vectors are compared individually: reversing
 both keeps the same normal but is still reported as inconsistent within a series.
 
@@ -48,7 +49,9 @@ reported independently and never substituted for measured spacing. `OrderingResu
 emits plain JSON-safe containers suitable for provenance logs.
 
 `SliceThickness` and `SpacingBetweenSlices` are retained as source metadata, but
-are not substituted for measured distances between adjacent projected positions.
+are not substituted for measured distances between adjacent projected positions. The
+DICOM standard defines thickness as nominal and spacing as center-to-center distance
+([PS3.3 C.7.6.2](https://dicom.nema.org/medical/dicom/current/output/chtml/part03/sect_C.7.6.2.html)).
 Negative `SpacingBetweenSlices` is preserved with a warning because signed use may be
 IOD-specific. `PixelSpacing` values are reported independently; a zero value is accepted
 only for a corresponding single-row or single-column image. Spacing statistics ignore
