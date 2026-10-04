@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,7 +31,7 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
         self.assertTrue(all(first["planes"].values()))
         self.assertTrue(all(first["laterality"].values()))
         for key in ("dataset_version_id", "source_identity", "fold_plan_id", "preprocessing_id",
-                    "target_schema_id", "selection_ids"):
+                    "target_schema_id", "selection_ids", "label_identity", "leakage_report_id"):
             self.assertEqual(first[key], second[key])
         self.assertEqual(first["cache"]["cold"], "cold-build")
         self.assertEqual(first["cache"]["warm"], "warm-load")
@@ -39,6 +40,18 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
             "slice_leakage": 0, "status": "PASS",
         })
         self.assertEqual(first["leakage_report_id"], second["leakage_report_id"])
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = self.run_smoke(temp)
+            ready_path = Path(temp) / "prepared" / "prepared-dataset.json"
+            persisted = json.loads(ready_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["status"], "READY")
+            self.assertEqual(persisted["dataset_index_id"], artifact["source_identity"])
+            self.assertEqual(persisted["target_registry_id"], artifact["target_schema_id"])
+            self.assertEqual(persisted["fold_plan_id"], artifact["fold_plan_id"])
+            self.assertEqual(persisted["seed"], 42)
+            self.assertEqual(persisted["config"]["synthetic_data"]["seed"], 42)
+            self.assertFalse(persisted["model_trained"])
+            self.assertFalse(persisted["production_ready"])
 
     def test_different_seed_changes_raw_and_label_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -47,6 +60,8 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
         self.assertNotEqual(baseline["source_identity"], changed["source_identity"])
         self.assertNotEqual(baseline["dataset_version_id"], changed["dataset_version_id"])
         self.assertNotEqual(baseline["label_identity"], changed["label_identity"])
+        self.assertNotEqual(baseline["fold_plan_id"], changed["fold_plan_id"])
+        self.assertNotEqual(baseline["selection_ids"], changed["selection_ids"])
         self.assertEqual(baseline["target_schema_id"], changed["target_schema_id"])
 
     def test_failure_injections_are_detected(self) -> None:
@@ -65,6 +80,7 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
                 result = self.run_smoke(temp, injection=injection)
                 self.assertNotEqual(result["status"], "READY")
                 self.assertIn(expected_detection[injection], result["detected"])
+                self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
                 if injection == "missing-position":
                     self.assertEqual(result["status"], "EXPECTED_FAILURE")
                     self.assertIn("fallback", result["detected"])

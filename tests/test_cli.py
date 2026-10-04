@@ -54,9 +54,23 @@ class DatasetCliTests(unittest.TestCase):
         result = run_cli("--help")
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("data", result.stdout)
+        self.assertIn("synthetic", result.stdout)
         smoke = run_cli("configs/experiments/smoke.toml")
         self.assertEqual(0, smoke.returncode, smoke.stderr)
         self.assertTrue(json.loads(smoke.stdout)["synthetic"])
+
+    def test_synthetic_smoke_help_and_leakage_injection_cli(self):
+        help_result = run_cli("synthetic", "smoke", "--help")
+        self.assertEqual(0, help_result.returncode, help_result.stderr)
+        self.assertIn("--inject", help_result.stdout)
+        with tempfile.TemporaryDirectory() as temp:
+            result = run_cli("synthetic", "smoke", "--seed", 42,
+                             "--inject", "patient-leakage", "--keep", temp)
+            self.assertEqual(0, result.returncode, result.stderr)
+            output = json.loads(result.stdout)
+            self.assertEqual("EXPECTED_FAILURE", output["status"])
+            self.assertIn("PATIENT_CROSS_FOLD", output["issue_types"])
+            self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
 
     def test_summary_human_json_and_manifest_inspection(self):
         human = run_cli("data", "summary", "--manifest", self.manifest)

@@ -229,11 +229,6 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         "label_count": sum(value is not None for row in target_rows.values() for value in row.values()),
         "missing_count": sum(value is None for row in target_rows.values() for value in row.values()),
         "missing_is_negative": False})
-    _write_json(root / "prepared" / "prepared-dataset.json", {"status": "READY",
-        "dataset_version": dataset.to_dict(), "fold_plan": fold_plan.to_dict(),
-        "target_schema_id": target_schema_id, "preprocessing_id": preprocessing_ids["physical_span_24"],
-        "leakage_report": leakage})
-
     # Close and reload the persisted representations, then recompute their material decisions.
     reloaded = load_manifest(index2 / "manifest.json")
     reloaded_assignments = json.loads((root / "folds" / "assignments.json").read_text(encoding="utf-8"))
@@ -282,7 +277,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     location_selection_id = digest(location_selections)
     if (location_dataset.dataset_version_id != dataset.dataset_version_id or
             location_fold_plan.fold_plan_id != fold_plan.fold_plan_id or
-            location_selection_id != selection_ids["physical_span_24"]):
+            location_selection_id != selection_ids["physical_span_24"] or
+            digest(_load_targets(second_root / "raw" / "targets.csv")) != label_identity):
         raise AssertionError("output directory changed a material pipeline identity")
     shutil.rmtree(second_root)
     stats = index.statistics
@@ -301,10 +297,36 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         "planes": plane_counts, "laterality": laterality_counts,
         "labels": {"hard_values": [0, 1], "missing_is_negative": False,
                    "missing_count": sum(value is None for row in target_rows.values() for value in row.values())},
-        "tests": {"determinism": "PASS", "preprocessing_identity": "PASS", "fold_seed_identity": "PASS",
+        "tests": {"cold_warm_identity": "PASS", "preprocessing_identity": "PASS", "fold_seed_identity": "PASS",
                   "serialization_reload": "PASS", "output_location": "PASS",
                   "instance_number_trap": "PASS"}}
     summary["duration_seconds"] = round(time.perf_counter() - started, 3)
+
+    # Publish READY only after all integrity gates pass; validate the serialized
+    # provenance before atomically exposing the prepared artifact.
+    prepared_path = root / "prepared" / "prepared-dataset.json"
+    pending_path = prepared_path.with_name("prepared-dataset.json.pending")
+    prepared = {"status": "READY", "readiness_scope": "metadata-only prepared-data integrity",
+        "synthetic": True, "model_trained": False, "clinical_validation": "NOT_PERFORMED",
+        "kaggle_score": None, "production_ready": False,
+        "dataset_index_id": index.index_id, "dataset_version": dataset.to_dict(),
+        "preprocessing_id": preprocessing_ids["physical_span_24"],
+        "target_registry_id": target_schema_id, "fold_plan_id": fold_plan.fold_plan_id,
+        "fold_plan": fold_plan.to_dict(), "leakage_report_id": leakage_result.report_id,
+        "leakage_report": leakage, "seed": seed,
+        "config": {"synthetic_data": asdict(config), "preprocessing": preprocessing24,
+                   "fold_strategy": "group", "n_folds": 5}}
+    _write_json(pending_path, prepared)
+    persisted = json.loads(pending_path.read_text(encoding="utf-8"))
+    if (persisted != prepared or persisted["status"] != "READY" or
+            persisted["dataset_index_id"] != index.index_id or
+            persisted["target_registry_id"] != TARGET_REGISTRY_ID or
+            persisted["fold_plan_id"] != fold_plan.fold_plan_id or
+            persisted["leakage_report_id"] != leakage_result.report_id or
+            persisted["config"]["synthetic_data"]["seed"] != seed):
+        pending_path.unlink(missing_ok=True)
+        raise AssertionError("prepared READY artifact failed persisted provenance validation")
+    pending_path.replace(prepared_path)
     _write_json(root / "smoke-summary.json", summary)
     return summary
 
