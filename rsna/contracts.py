@@ -21,9 +21,9 @@ class DatasetVersion:
     class_names: tuple[str, ...]
     preprocessing: Mapping[str, Any] = field(default_factory=dict)
     uri: str = ""
-    dataset_index_artifact_id: str | None = None
     schema_version: int = SCHEMA_VERSION
     dataset_version_id: str = ""
+    dataset_index_artifact_id: str | None = None
 
     def __post_init__(self) -> None:
         _required_text(self.name, "dataset name")
