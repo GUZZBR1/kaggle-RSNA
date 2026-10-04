@@ -116,10 +116,17 @@ def load_or_refresh(root: str | Path, cache_path: str | Path, *,
     scan_seconds = time.perf_counter() - t0
     source_fingerprint = digest([[p, *states[p]] for p in sorted(states)])
     old_rows: dict[str, tuple] = {}
+    cached_index: DatasetIndex | None = None
     cache_error = None
     if target.exists() and not rebuild:
         try:
             old_rows, manifest = _cache_rows(target, dataset_version_id)
+            old_files = [root_path / rel for rel in sorted(old_rows)]
+            cached_index = _load_index(old_rows, root_path, old_files,
+                                      on_invalid=manifest.get("on_invalid", "warn"))
+            if (cached_index.index_id != manifest["index_id"] or
+                    cached_index.statistics["n_slices"] != int(manifest["record_count"])):
+                raise ValueError("cached index identity or record count mismatch")
         except ValueError as exc:
             cache_error = str(exc)
             if cache_policy == "strict" or validate_only:
@@ -132,10 +139,10 @@ def load_or_refresh(root: str | Path, cache_path: str | Path, *,
         old_states = {p: tuple(row[:3]) for p, row in old_rows.items()}
         if old_states != states:
             raise ValueError("source fingerprint mismatch")
-        index = _load_index(old_rows, root_path, files)
-        if index.index_id != manifest["index_id"] or index.statistics["n_slices"] != int(manifest["record_count"]):
-            raise ValueError("cached index identity or record count mismatch")
-        return IndexResult(index,
+        if manifest.get("on_invalid", "warn") != on_invalid:
+            raise ValueError("cache invalid-file policy mismatch")
+        assert cached_index is not None
+        return IndexResult(cached_index,
             RefreshReport("validate-only", 0, 0, 0, len(states), 0,
                           scan_seconds=scan_seconds), source_fingerprint)
 
@@ -165,11 +172,12 @@ def load_or_refresh(root: str | Path, cache_path: str | Path, *,
             warnings.append(message)
             records[rel] = (size, mtime_ns, kind, "invalid", _json({"warning": message}))
     parse_seconds = time.perf_counter() - parse_start
+    policy_changed = bool(old_rows and manifest.get("on_invalid", "warn") != on_invalid)
     if cache_error or rebuild:
         mode = "rebuild"
     elif not target.exists():
         mode = "cold-build"
-    elif not refresh and not changed and not removed_paths:
+    elif not refresh and not changed and not removed_paths and not policy_changed:
         mode = "warm-load"
     else:
         mode = "incremental-refresh"
@@ -177,16 +185,19 @@ def load_or_refresh(root: str | Path, cache_path: str | Path, *,
     normalized_rows = {p: (states[p][0], states[p][1], states[p][2],
                            records.get(p, (0, 0, "", "ignored", None))[3],
                            records.get(p, (0, 0, "", "ignored", None))[4]) for p in states}
-    index = _load_index(normalized_rows, root_path, files, on_invalid=on_invalid)
+    index = (cached_index if mode == "warm-load" else
+             _load_index(normalized_rows, root_path, files, on_invalid=on_invalid))
+    assert index is not None
     if mode == "warm-load" and (index.index_id != manifest["index_id"] or
                                   index.statistics["n_slices"] != int(manifest["record_count"]) or
                                   manifest["source_fingerprint"] != source_fingerprint):
         raise ValueError("cached index identity, source fingerprint or record count mismatch")
     report = RefreshReport(mode, len(added_paths), len(modified_paths), len(removed_paths),
-        len(states) - len(changed), len(changed), tuple(warnings + ([cache_error] if cache_error else [])),
+        len(states) - len(changed), sum(states[p][2] == "dicom" for p in changed),
+        tuple(warnings + ([cache_error] if cache_error else [])),
         scan_seconds, parse_seconds, time.perf_counter() - parse_start - parse_seconds)
     if mode != "warm-load":
-        _write_cache(target, normalized_rows, dataset_version_id, source_fingerprint, index)
+        _write_cache(target, normalized_rows, dataset_version_id, source_fingerprint, index, on_invalid)
     return IndexResult(index, report, source_fingerprint)
 
 
@@ -205,17 +216,20 @@ def _load_index(rows: dict[str, tuple], root: Path, files: list[Path], *,
         elif kind == "dicom" and status == "invalid":
             invalid += 1
             warning = json.loads(value)["warning"]
+            if on_invalid == "strict":
+                raise ValueError(f"invalid cached DICOM {rel}: {warning}")
             if on_invalid == "warn":
                 warnings.append(warning)
     return build_index(root, files, slices, warnings, invalid, metadata)
 
 
 def _write_cache(path: Path, rows: dict[str, tuple], dataset_version_id: str | None,
-                 source_fingerprint: str, index: DatasetIndex) -> None:
+                 source_fingerprint: str, index: DatasetIndex, on_invalid: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = _json([[p, *rows[p]] for p in sorted(rows)]).encode()
     manifest = {"schema_version": str(INDEX_SCHEMA_VERSION),
-                "dataset_version_id": dataset_version_id or "", "file_count": str(len(rows)),
+                "dataset_version_id": dataset_version_id or "", "on_invalid": on_invalid,
+                "file_count": str(len(rows)),
                 "source_fingerprint": source_fingerprint, "index_id": index.index_id,
                 "payload_sha256": hashlib.sha256(payload).hexdigest(),
                 "record_count": str(index.statistics["n_slices"])}

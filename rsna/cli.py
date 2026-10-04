@@ -46,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
 def _data_index(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="kaggle-rsna data-index")
     parser.add_argument("--input", required=True, help="Dataset root directory")
-    parser.add_argument("--output", required=True, help="Output directory for manifest.json")
+    parser.add_argument("--output", default="artifacts/dataset-index",
+                        help="Output directory (default: artifacts/dataset-index)")
     parser.add_argument("--on-invalid", choices=("strict", "warn", "skip-invalid"), default="warn")
     parser.add_argument("--refresh", action="store_true", help="Force a source scan and incremental refresh")
     parser.add_argument("--rebuild", action="store_true", help="Discard and rebuild the cache")

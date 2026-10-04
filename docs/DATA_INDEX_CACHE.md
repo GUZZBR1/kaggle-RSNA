@@ -1,8 +1,8 @@
 # Persistent dataset index cache
 
 `python -m rsna data-index --input /data/rsna --output artifacts/dataset-index`
-creates `index.sqlite3` (the canonical persistent cache) and an inspectable
-`manifest.json` compatibility export. The SQLite cache stores only relative
+creates `index.sqlite3` as operational storage and an inspectable
+`manifest.json` export of the canonical `DatasetIndex`. The SQLite cache stores only relative
 paths, file state, parse status, and selected DICOM header metadata. It never
 stores pixel arrays, images, tensors, embeddings, or model features.
 
@@ -40,7 +40,7 @@ and TSV files are tracked as metadata inputs.
   and reports why. The default is `rebuild`.
 - `--on-invalid strict|warn|skip-invalid` controls malformed DICOM handling.
 
-SQLite is the canonical format because its transaction and single-file atomic
-replacement make concurrent replacement safe from partial-cache reads while
-remaining portable and inspectable with standard tools. Readers see either the
-previous complete file or the new complete file.
+SQLite holds per-file operational cache state; `DatasetIndex` and its JSON
+manifest remain the canonical semantic representation. Transactions plus a
+single-file atomic replacement prevent readers from seeing a partial cache. The
+format stays portable and inspectable with standard tools.

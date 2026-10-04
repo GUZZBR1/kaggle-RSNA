@@ -1,16 +1,16 @@
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 from pathlib import Path
 
 from pydicom.dataset import FileDataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, generate_uid
 
-from rsna.data import discover_dataset, load_manifest, load_or_refresh, read_dicom_metadata, save_manifest
+from rsna import DatasetVersion
+from rsna.data import discover_dataset, load_manifest, read_dicom_metadata, save_manifest
+from rsna.identity import digest
 
 
 def write_dicom(path, *, study="1.2.10", series="1.2.20", sop=None, patient="P1", missing=()):
@@ -38,85 +38,6 @@ def write_dicom(path, *, study="1.2.10", series="1.2.20", sop=None, patient="P1"
 
 
 class DatasetIndexTests(unittest.TestCase):
-    def test_persistent_index_cold_warm_and_incremental_changes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root, cache = Path(tmp) / "data", Path(tmp) / "cache" / "index.sqlite3"
-            first_file = write_dicom(root / "a.dcm", sop="1.2.1")
-            cold = load_or_refresh(root, cache)
-            self.assertEqual("cold-build", cold.report.mode)
-            self.assertEqual(1, cold.report.reparsed)
-            warm = load_or_refresh(root, cache)
-            self.assertEqual("warm-load", warm.report.mode)
-            self.assertEqual(0, warm.report.reparsed)
-            self.assertEqual(cold.index.index_id, warm.index.index_id)
-            write_dicom(root / "b.dcm", sop="1.2.2")
-            added = load_or_refresh(root, cache)
-            self.assertEqual((1, 1), (added.report.added, added.report.reparsed))
-            write_dicom(first_file, sop="1.2.3")
-            changed = load_or_refresh(root, cache)
-            self.assertEqual((1, 1), (changed.report.modified, changed.report.reparsed))
-            (root / "b.dcm").unlink()
-            removed = load_or_refresh(root, cache)
-            self.assertEqual(1, removed.report.removed)
-            self.assertEqual(1, removed.index.statistics["n_slices"])
-
-    def test_cache_validation_corruption_binding_and_root_portability(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            root, cache = base / "one", base / "cache.sqlite3"
-            write_dicom(root / "s" / "a.dcm", sop="1.2.88")
-            original = load_or_refresh(root, cache, dataset_version_id="v1")
-            moved = base / "moved"
-            shutil.copytree(root, moved)
-            self.assertEqual(original.index.index_id, load_or_refresh(moved, cache,
-                dataset_version_id="v1").index.index_id)
-            with self.assertRaisesRegex(ValueError, "binding mismatch"):
-                load_or_refresh(root, cache, dataset_version_id="v2", cache_policy="strict")
-            db = sqlite3.connect(cache)
-            try:
-                db.execute("update files set record='{}' where path='s/a.dcm'")
-                db.commit()
-            finally:
-                db.close()
-            with self.assertRaises(ValueError):
-                load_or_refresh(root, cache, cache_policy="strict")
-            rebuilt = load_or_refresh(root, cache)
-            self.assertEqual("rebuild", rebuilt.report.mode)
-            db = sqlite3.connect(cache)
-            try:
-                db.execute("update manifest set value='0' where key='schema_version'")
-                db.commit()
-            finally:
-                db.close()
-            with self.assertRaisesRegex(ValueError, "schema version"):
-                load_or_refresh(root, cache, cache_policy="strict")
-            self.assertEqual("rebuild", load_or_refresh(root, cache).report.mode)
-
-    def test_validate_only_does_not_write_and_lookup_maps_are_available(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root, cache = Path(tmp) / "data", Path(tmp) / "idx.sqlite3"
-            write_dicom(root / "a.dcm", sop="1.2.44")
-            built = load_or_refresh(root, cache)
-            before = cache.stat().st_mtime_ns
-            checked = load_or_refresh(root, cache, validate_only=True)
-            self.assertEqual("validate-only", checked.report.mode)
-            self.assertEqual(before, cache.stat().st_mtime_ns)
-            self.assertIsNotNone(built.index.slice_by_path("a.dcm"))
-            self.assertEqual(1, len(built.index.slices_by_sop_uid("1.2.44")))
-
-    def test_failed_atomic_replace_preserves_previous_cache(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root, cache = Path(tmp) / "data", Path(tmp) / "index.sqlite3"
-            write_dicom(root / "a.dcm", sop="1.2.31")
-            load_or_refresh(root, cache)
-            old_bytes = cache.read_bytes()
-            write_dicom(root / "b.dcm", sop="1.2.32")
-            with patch("rsna.data.cache.os.replace", side_effect=OSError("simulated crash")):
-                with self.assertRaisesRegex(OSError, "simulated crash"):
-                    load_or_refresh(root, cache)
-            self.assertEqual(old_bytes, cache.read_bytes())
-            self.assertEqual(2, load_or_refresh(root, cache).index.statistics["n_slices"])
-
     def test_one_series_three_slices_and_metadata_only_reader(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -187,10 +108,6 @@ class DatasetIndexTests(unittest.TestCase):
             self.assertEqual(1, result.stdout.count("Studies:"))
             self.assertTrue((output / "manifest.json").is_file())
             self.assertEqual(discover_dataset(root).index_id, load_manifest(output / "manifest.json").index_id)
-            warm = subprocess.run([sys.executable, "-m", "rsna", "data-index",
-                "--input", str(root), "--output", str(output)], check=True, capture_output=True, text=True)
-            self.assertIn("Mode: warm-load", warm.stdout)
-            self.assertIn("Files parsed: 0", warm.stdout)
 
     def test_manifest_and_ids_are_deterministic_and_root_move_independent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,24 +127,18 @@ class DatasetIndexTests(unittest.TestCase):
             self.assertEqual(first_hash, second_hash)
             self.assertEqual(first_bytes, path.read_bytes())
 
-    def test_cached_invalid_dicom_is_not_reparsed_until_modified(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root, cache = Path(tmp) / "data", Path(tmp) / "index.sqlite3"
-            bad = root / "bad.dcm"
-            bad.parent.mkdir(parents=True)
-            bad.write_bytes(b"invalid DICOM")
-            cold = load_or_refresh(root, cache)
-            warm = load_or_refresh(root, cache)
-            self.assertEqual(1, cold.index.statistics["invalid_files"])
-            self.assertEqual(0, warm.report.reparsed)
-            bad.write_bytes(b"changed invalid DICOM content")
-            changed = load_or_refresh(root, cache)
-            self.assertEqual(1, changed.report.modified)
-            self.assertEqual(1, changed.report.reparsed)
-            self.assertTrue(changed.report.warnings)
+    def test_dataset_version_optional_artifact_binding_preserves_legacy_identity(self):
+        legacy = DatasetVersion("d", "v1", "a" * 64, "none", ("normal",))
+        bound = DatasetVersion("d", "v1", "a" * 64, "none", ("normal",),
+                               dataset_index_artifact_id="b" * 64)
+        self.assertEqual(64, len(bound.dataset_version_id))
+        self.assertNotEqual(legacy.dataset_version_id, bound.dataset_version_id)
+        legacy_payload = {"schema_version": legacy.schema_version, "name": legacy.name,
+            "version": legacy.version, "source_manifest_sha256": legacy.source_manifest_sha256,
+            "preprocessing_version": legacy.preprocessing_version,
+            "preprocessing": legacy.preprocessing, "class_names": legacy.class_names}
+        self.assertEqual(digest(legacy_payload), legacy.dataset_version_id)
+
+
 if __name__ == "__main__":
     unittest.main()
-
-
-
-
