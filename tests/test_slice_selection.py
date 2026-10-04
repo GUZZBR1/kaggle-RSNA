@@ -70,6 +70,13 @@ class SliceSelectionTests(unittest.TestCase):
                          tuple(i["metadata"]["SOPInstanceUID"] for i in again.selected))
         self.assertTrue(any("duplicate physical" in warning for warning in selected.warnings))
 
+    def test_physical_sampling_preserves_order_and_endpoints(self):
+        result = select_slices(series(4, [0.0, 1.0, 2.0, 100.0]),
+                               strategy="physical_span", count=4)
+        self.assertEqual((0, 1, 2, 3), result.selected_indices)
+        self.assertEqual((0.0, 1.0, 2.0, 100.0), result.selected_positions_mm)
+        self.assertEqual(100.0, result.last_selected_position)
+
     def test_count_edges_and_preprocessing_identity(self):
         self.assertEqual((19,), select_slices(series(40), count=1).selected_indices)
         self.assertEqual(40, select_slices(series(40), count=40).actual_count)

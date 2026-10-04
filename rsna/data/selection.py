@@ -197,15 +197,20 @@ def _physical_indices(positions: Sequence[float | None], count: int,
     if len(representatives) >= count:
         candidates = representatives
     low, high = positions[0], positions[-1]
-    result = []
-    used: set[int] = set()
+    candidate_slots = []
     for slot in range(count):
-        target = low + (high - low) * slot / (count - 1)
-        available = [i for i in candidates if i not in used]
-        chosen = min(available, key=lambda i: (abs(positions[i] - target), i))
-        result.append(chosen)
-        used.add(chosen)
-    return result
+        if slot == 0:
+            candidate_slot = 0
+        elif slot == count - 1:
+            candidate_slot = len(candidates) - 1
+        else:
+            target = low + (high - low) * slot / (count - 1)
+            lower = candidate_slots[-1] + 1
+            upper = len(candidates) - (count - slot)
+            candidate_slot = min(range(lower, upper + 1),
+                                 key=lambda j: (abs(positions[candidates[j]] - target), j))
+        candidate_slots.append(candidate_slot)
+    return [candidates[j] for j in candidate_slots]
 
 
 def _physical_position(item: Any) -> float | None:
