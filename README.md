@@ -3,7 +3,7 @@
 Architecture foundation for the **RSNA Knee Abnormality Detection** MRI classification
 competition. It defines reproducible dataset, fold-plan, model-candidate, training,
 prediction, evaluation, and submission-artifact contracts. It does not include a model,
-DICOM pipeline, real fold assignment, or final Kaggle notebook.
+model training, or final Kaggle notebook.
 
 ## Quick start
 
@@ -21,7 +21,7 @@ example are configurable placeholders and should be replaced with the official l
 Ray is optional: `pip install -e '.[ray]'`. Cloud and Ray providers adapt injected execution
 boundaries and do not provision or assume a particular vendor or cluster.
 
-See [architecture](docs/ARCHITECTURE.md) and [migration notes](docs/MIGRATION.md).
+Fold generation is available with `python -m rsna folds`; see [fold documentation](docs/FOLDS.md), [architecture](docs/ARCHITECTURE.md), and [migration notes](docs/MIGRATION.md).
 
 Dataset metadata can be indexed without decoding image pixels:
 
