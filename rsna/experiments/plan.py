@@ -13,6 +13,8 @@ def plan_jobs(spec: ExperimentSpec, dataset: DatasetVersion, fold_plan: FoldPlan
         raise ValueError("experiment FoldPlan does not match dataset or spec")
     if tuple(spec.class_names) != tuple(dataset.class_names):
         raise ValueError("experiment class ordering does not match DatasetVersion")
+    if spec.synthetic != dataset.synthetic:
+        raise ValueError("experiment synthetic mode does not match DatasetVersion")
     if not set(spec.fold_ids).issubset(fold_plan.fold_ids):
         raise ValueError("experiment references folds absent from FoldPlan")
     if set(candidates) != set(spec.model_candidate_ids):

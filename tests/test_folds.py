@@ -11,6 +11,8 @@ from rsna.cli import main
 from rsna.folds import generate_fold_plan, load_fold_plan, save_fold_plan
 from rsna.folds.validate import validate_leakage
 from rsna.data.models import DatasetIndex, StudyRecord
+from rsna.labels import LabelRecord
+from rsna.targets import TARGETS, TARGET_REGISTRY_ID
 
 
 def studies(n=100):
@@ -42,9 +44,9 @@ class FoldPlanTests(unittest.TestCase):
 
     def test_label_content_is_identity_bearing(self):
         rows = studies(10)
-        first_labels = {row["study_id"]: {"acl": 0} for row in rows}
+        first_labels = {row["study_id"]: {"ACL": 0} for row in rows}
         second_labels = dict(first_labels)
-        second_labels["study_000"] = {"acl": 1}
+        second_labels["study_000"] = {"ACL": 1}
         first = generate_fold_plan(rows, n_folds=2, labels=first_labels)
         second = generate_fold_plan(rows, n_folds=2, labels=second_labels)
         self.assertNotEqual(first.fold_plan_id, second.fold_plan_id)
@@ -161,30 +163,90 @@ class FoldPlanTests(unittest.TestCase):
 
     def test_complete_and_partial_label_statistics_preserve_unknowns(self):
         rows = studies(10)
-        labels = {row["study_id"]: {"acl": i % 2, "meniscus": None if i < 2 else int(i % 3 == 0)}
+        labels = {row["study_id"]: {"ACL": i % 2, "Medial Meniscus": None if i < 2 else int(i % 3 == 0)}
                   for i, row in enumerate(rows)}
         plan = generate_fold_plan(rows, n_folds=2, labels=labels)
         total = plan.statistics["total"]["targets"]
-        self.assertEqual(5, total["acl"]["positive"])
-        self.assertEqual(5, total["acl"]["negative"])
-        self.assertEqual(2, total["meniscus"]["missing"])
-        self.assertEqual(8, total["meniscus"]["positive"] + total["meniscus"]["negative"])
+        self.assertEqual(5, total["ACL"]["positive"])
+        self.assertEqual(5, total["ACL"]["negative"])
+        self.assertEqual(2, total["Medial Meniscus"]["missing"])
+        self.assertEqual(8, total["Medial Meniscus"]["positive"] + total["Medial Meniscus"]["negative"])
 
     def test_multilabel_strategy_is_explicit_and_requires_observed_labels(self):
         with self.assertRaisesRegex(ValueError, "requires at least one"):
             generate_fold_plan(studies(10), n_folds=2, strategy="multilabel_group_stratified")
-        labels = {row["study_id"]: {"acl": i % 2} for i, row in enumerate(studies(10))}
+        labels = {row["study_id"]: {"ACL": i % 2} for i, row in enumerate(studies(10))}
         plan = generate_fold_plan(studies(10), n_folds=2,
                                   strategy="multilabel_group_stratified", labels=labels)
         self.assertEqual("multilabel_group_stratified", plan.strategy)
-        self.assertEqual(10, plan.statistics["total"]["targets"]["acl"]["positive"] +
-                         plan.statistics["total"]["targets"]["acl"]["negative"])
+        self.assertEqual(10, plan.statistics["total"]["targets"]["ACL"]["positive"] +
+                         plan.statistics["total"]["targets"]["ACL"]["negative"])
+
+    def test_multilabel_stratification_improves_rare_target_balance_without_leakage(self):
+        rows, labels = [], {}
+        for patient in range(50):
+            for visit in range(2):
+                study = f"s{patient:02d}-{visit}"
+                rows.append({"study_id": study, "patient_id": f"p{patient:02d}"})
+                labels[study] = {"ACL": int(patient < 5)}
+        grouped = generate_fold_plan(rows, n_folds=5, labels=labels)
+        stratified = generate_fold_plan(rows, n_folds=5, strategy="multilabel_group_stratified",
+                                        labels=labels)
+        group_range = grouped.statistics["diagnostics"]["target_prevalence_range"]["ACL"]
+        stratified_range = stratified.statistics["diagnostics"]["target_prevalence_range"]["ACL"]
+        self.assertLess(stratified_range, group_range)
+        self.assertEqual([20] * 5, [value["n_studies"] for value in stratified.statistics["folds"].values()])
+        validate_leakage(rows, stratified.assignments)
 
     def test_rare_target_generates_warning(self):
         rows = studies(10)
-        labels = {row["study_id"]: {"rare": int(i == 0)} for i, row in enumerate(rows)}
+        labels = {row["study_id"]: {"ACL": int(i == 0)} for i, row in enumerate(rows)}
         plan = generate_fold_plan(rows, n_folds=5, labels=labels)
-        self.assertTrue(any("rare target rare" in warning for warning in plan.warnings))
+        self.assertTrue(any("rare target ACL" in warning for warning in plan.warnings))
+
+    def test_label_records_preserve_official_order_hard_soft_and_missing_semantics(self):
+        rows = studies(10)
+        hard = LabelRecord("study_000", {name: (1 if name == "ACL" else None) for name in TARGETS},
+                           "manual_review", allow_partial=True)
+        soft = LabelRecord("study_001", {name: (0.25 if name == "ACL" else None) for name in TARGETS},
+                           "manual_review", label_type="soft", allow_partial=True, allow_soft=True)
+        plan = generate_fold_plan(rows, n_folds=2, labels=[hard, soft])
+        targets = plan.statistics["total"]["targets"]
+        self.assertEqual(TARGETS, tuple(targets))
+        self.assertEqual(TARGETS, tuple(plan.configuration["target_order"]))
+        self.assertEqual(TARGET_REGISTRY_ID, plan.configuration["target_registry_id"])
+        self.assertEqual(1, targets["ACL"]["positive"])
+        self.assertEqual(1, targets["ACL"]["soft_count"])
+        self.assertEqual(0.25, targets["ACL"]["soft_probability_sum"])
+        self.assertEqual(8, targets["ACL"]["missing"])
+        self.assertNotEqual(
+            generate_fold_plan(rows, n_folds=2, labels=[hard]).fold_plan_id,
+            generate_fold_plan(rows, n_folds=2, labels=[soft]).fold_plan_id,
+        )
+
+    def test_unknown_targets_and_unapproved_soft_values_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unknown target"):
+            generate_fold_plan(studies(5), n_folds=2,
+                               labels={"study_000": {"not a target": 1}})
+        with self.assertRaisesRegex(ValueError, "must be 0, 1, or null"):
+            generate_fold_plan(studies(5), n_folds=2,
+                               labels={"study_000": {"ACL": 0.25}})
+
+    def test_serialized_label_record_order_and_identity_are_validated(self):
+        record = LabelRecord("study_000", {name: (1 if name == "ACL" else None) for name in TARGETS},
+                             "manual_review", allow_partial=True).to_dict()
+        plan = generate_fold_plan(studies(5), n_folds=2, labels={"study_000": record})
+        self.assertEqual(TARGETS, tuple(plan.configuration["target_order"]))
+        record["targets"] = list(reversed(record["targets"]))
+        with self.assertRaisesRegex(ValueError, "target order"):
+            generate_fold_plan(studies(5), n_folds=2, labels={"study_000": record})
+
+    def test_mixed_patient_and_missing_id_uses_study_fallback_warning(self):
+        plan = generate_fold_plan([{"study_id": "s1", "patient_id": "p1"},
+                                   {"study_id": "s2"}, {"study_id": "s3"}], n_folds=2)
+        self.assertEqual("patient_id_with_study_fallback", plan.grouping_key)
+        self.assertEqual("study:s2", plan.study_groups["s2"])
+        self.assertTrue(any("lack PatientID" in warning for warning in plan.warnings))
 
     def test_artificial_patient_and_study_leakage_fail(self):
         rows = [{"study_id": "s1", "patient_id": "p1"},

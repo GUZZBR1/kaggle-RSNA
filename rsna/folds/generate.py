@@ -7,6 +7,8 @@ from collections import defaultdict
 from typing import Any, Mapping
 
 from ..identity import digest
+from ..labels import LabelRecord
+from ..targets import TARGET_REGISTRY, TARGETS, TARGET_REGISTRY_ID
 from .models import FoldPlanManifest
 from .statistics import summarize
 from .validate import validate_leakage
@@ -45,7 +47,8 @@ def generate_fold_plan(dataset: Any, n_folds: int = 5, strategy: str = "group",
     records.sort(key=lambda row: row["study_id"])
     labels = _normalize_labels(labels, set(study_ids))
     if strategy == "multilabel_group_stratified" and not any(
-            value is not None for row in labels.values() for value in row.values()):
+            value is not None for row in labels.values() for key, value in row.items()
+            if key != "__label_type__"):
         raise ValueError("multilabel_group_stratified requires at least one observed label")
 
     group_for_study, group_members, grouping_key = _groups(records)
@@ -80,6 +83,8 @@ def generate_fold_plan(dataset: Any, n_folds: int = 5, strategy: str = "group",
                                                         else "deterministic_multilabel_greedy_v1"),
                                            "size_deviation_threshold": size_deviation_threshold,
                                            "prevalence_range_threshold": prevalence_range_threshold,
+                                           "target_order": list(TARGETS),
+                                           "target_registry_id": TARGET_REGISTRY_ID,
                                            "labels_sha256": digest(labels) if labels else None},
                             statistics=stats,
                             warnings=tuple(warnings), locked=locked)
@@ -194,19 +199,19 @@ def _stratified_group_assignment(groups: Mapping[str, list[str]], records: list[
     neither positive nor negative counts. This is a deterministic approximation, not an
     exact multilabel stratification solver.
     """
-    targets = sorted({name for values in labels.values() for name in values})
+    targets = TARGETS
     vectors: dict[str, list[float]] = {}
     for group, studies in groups.items():
         vector = [float(len(studies))]
         for target in targets:
             values = [labels.get(study, {}).get(target) for study in studies]
-            vector.extend((sum(value in (1, True) for value in values),
-                           sum(value in (0, False) for value in values)))
+            vector.extend((sum(float(value) for value in values if value is not None),
+                           sum(1.0 - float(value) for value in values if value is not None)))
         vectors[group] = vector
     totals = [sum(vector[i] for vector in vectors.values()) for i in range(len(next(iter(vectors.values()))))]
     def tie(key: str) -> str:
         return hashlib.sha256(f"{seed}:{key}".encode()).hexdigest()
-    ordered = sorted(groups, key=lambda key: (-sum(vectors[key][1::2]), -len(groups[key]), tie(key), key))
+    ordered = sorted(groups, key=lambda key: (-sum(vectors[key][1:]), -len(groups[key]), tie(key), key))
     fold_values = [[0.0] * len(totals) for _ in range(n_folds)]
     result = {}
     for group in ordered:
@@ -217,7 +222,9 @@ def _stratified_group_assignment(groups: Mapping[str, list[str]], records: list[
             for index, value in enumerate(vectors[group]):
                 target = totals[index] / n_folds
                 scale = max(target, 1.0)
-                scores.append(((fold_values[fold][index] + value - target) / scale) ** 2)
+                before = (fold_values[fold][index] - target) / scale
+                after = (fold_values[fold][index] + value - target) / scale
+                scores.append(after ** 2 - before ** 2)
             return sum(scores), hashlib.sha256(f"{seed}:{group}:fold_{fold}".encode()).hexdigest()
         chosen = min(eligible_folds, key=cost)
         result[group] = f"fold_{chosen}"
@@ -226,22 +233,56 @@ def _stratified_group_assignment(groups: Mapping[str, list[str]], records: list[
     return result
 
 
-def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | None,
+def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | Any | None,
                       study_ids: set[str]) -> dict[str, dict[str, int | None]]:
     if labels is None:
         return {}
+    if isinstance(labels, (list, tuple)):
+        labels = {record.study_id: record for record in labels}
     if "labels" in labels and isinstance(labels["labels"], Mapping):
         labels = labels["labels"]  # type: ignore[assignment]
     result = {}
     for study, targets in labels.items():
         if study not in study_ids:
             raise ValueError(f"labels reference unknown study {study!r}")
+        if isinstance(targets, LabelRecord):
+            if targets.study_id != study:
+                raise ValueError(f"label record key {study!r} does not match study {targets.study_id!r}")
+            result[str(study)] = {**dict(targets.values), "__label_type__": targets.label_type}
+            continue
         if not isinstance(targets, Mapping):
             raise ValueError(f"labels for study {study!r} must be an object")
+        label_type = targets.get("label_type", "hard")
+        if "values" in targets and isinstance(targets["values"], Mapping):
+            if "target_registry_id" in targets:
+                record = LabelRecord.from_dict(targets)
+                if record.study_id != study:
+                    raise ValueError(f"label record key {study!r} does not match study {record.study_id!r}")
+            else:
+                # Reuse the canonical validation boundary, including missingness and
+                # explicit opt-in for soft supervision.
+                record = LabelRecord(study_id=str(study), values=targets["values"],
+                                     provenance=targets.get("provenance", "manual_review"),
+                                     label_type=label_type,
+                                     allow_partial=targets.get("allow_partial", True),
+                                     allow_soft=targets.get("allow_soft", label_type == "soft"),
+                                     target_schema_version=targets.get("target_schema_version", 1),
+                                     patient_id=targets.get("patient_id"))
+            result[str(study)] = {**dict(record.values), "__label_type__": record.label_type}
+            continue
+        if label_type != "hard":
+            raise ValueError("soft labels must use a serialized LabelRecord with explicit allow_soft opt-in")
         result[str(study)] = {}
         for name, value in targets.items():
+            if name in {"label_type", "allow_partial", "allow_soft", "provenance",
+                        "target_schema_version", "patient_id", "targets", "mask",
+                        "target_registry_id"}:
+                continue
             if not isinstance(name, str) or not name:
                 raise ValueError("label target names must be nonempty strings")
+            canonical = TARGET_REGISTRY.canonical_name(name)
+            if canonical in result[str(study)]:
+                raise ValueError(f"duplicate target after alias normalization: {canonical}")
             if value is None:
                 normalized = None
             elif value in (True, 1) and type(value) in (bool, int):
@@ -250,7 +291,12 @@ def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | None,
                 normalized = 0
             else:
                 raise ValueError(f"label {name!r} for study {study!r} must be 0, 1, or null")
-            result[str(study)][name] = normalized
+            result[str(study)][canonical] = normalized
+        result[str(study)]["__label_type__"] = "hard"
+    # Keep official target order in the normalized identity and serialized statistics.
+    result = {study: {**{name: values.get(name) for name in TARGETS},
+                      "__label_type__": values["__label_type__"]}
+              for study, values in result.items()}
     return result
 
 

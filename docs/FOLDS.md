@@ -18,9 +18,14 @@ The default `group` algorithm sorts input records canonically, orders larger gro
 first, and places each group in the currently smallest fold. Seeded SHA-256 tie
 breakers make the assignment independent of input order and Python's random module.
 The optional `multilabel_group_stratified` strategy greedily minimizes normalized
-positive and known-label count imbalance while keeping whole patient/study groups
-intact. Missing labels are excluded from positive and negative counts; no imputation
-is performed. It is an approximation and is not enabled by default.
+positive and negative mass while keeping whole patient/study groups intact. Labels
+are normalized by the central `TargetRegistry`; target aliases map to canonical names
+and the manifest records the official target order and registry identity. Hard
+`LabelRecord`s accept 0, 1, or missing values. Soft `LabelRecord`s require the
+explicit `allow_soft` opt-in, contribute their probabilities to prevalence and
+stratification, and remain distinguishable in fold statistics and plan identity.
+Missing labels are counted separately and are never imputed. This is an approximation
+and is not enabled by default.
 
 ## Lifecycle
 
@@ -59,6 +64,9 @@ python -m rsna folds \
 ```
 
 When study labels are available, provide a JSON object keyed by study ID whose values
-map target names to `0`, `1`, or `null`, and select `--strategy multilabel-group-stratified`. The report includes per-fold and total study, patient,
-series, and group counts; target positive, negative, missing, and prevalence counts;
-size and prevalence imbalance diagnostics; and warnings for rare targets.
+map canonical target names or registered aliases to `0`, `1`, or `null`, and select
+`--strategy multilabel-group-stratified`. To pass soft labels, use serialized
+`LabelRecord` objects with `label_type: "soft"` and `allow_soft: true`. The report
+includes per-fold and total study, patient, series, and group counts; target positive,
+negative, soft, missing, and prevalence counts; size and prevalence imbalance
+diagnostics; and warnings for rare targets.
