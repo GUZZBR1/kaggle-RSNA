@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keigo-kaggriculture/schemas/simulation-job.schema.json",
+  "title": "Keigo SimulationJob",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["experiment_id", "candidate_id", "candidate_artifact_sha256", "candidate_artifact_uri", "opponent_id", "seed", "seat", "simulator", "simulator_version", "configuration", "job_id"],
+  "properties": {
+    "experiment_id": {"$ref": "#/$defs/sha256"},
+    "candidate_id": {"$ref": "#/$defs/sha256"},
+    "candidate_artifact_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_artifact_uri": {"type": "string"},
+    "opponent_id": {"type": "string", "minLength": 1},
+    "seed": {"type": "integer", "minimum": 0},
+    "seat": {"enum": [0, 1]},
+    "simulator": {"type": "string", "minLength": 1},
+    "simulator_version": {"type": "string", "minLength": 1},
+    "configuration": {"type": "object"},
+    "job_id": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

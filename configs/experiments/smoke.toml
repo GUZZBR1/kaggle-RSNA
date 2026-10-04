@@ -1,0 +1,23 @@
+[candidate]
+name = "contract-smoke-candidate"
+artifact_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+entrypoint = "agent"
+
+[experiment]
+name = "smoke"
+seeds = [11, 23]
+seed_split = "development"
+seed_registry = "../seeds/registry.json"
+opponents = ["baseline"]
+simulator = "kaggriculture"
+simulator_version = "unconfigured"
+
+[experiment.configuration]
+mode = "contract-smoke"
+
+[experiment.evaluation_policy]
+minimum_seed_blocks = 2
+
+[experiment.resource_request]
+cpus = 1
+gpus = 0

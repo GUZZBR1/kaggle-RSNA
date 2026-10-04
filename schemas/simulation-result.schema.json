@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keigo-kaggriculture/schemas/simulation-result.schema.json",
+  "title": "Keigo SimulationResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "candidate_id", "opponent_id", "seed", "seat", "status", "metrics", "provider", "execution_id", "failure", "outputs", "result_id", "schema_version"],
+  "properties": {
+    "job_id": {"$ref": "#/$defs/sha256"},
+    "candidate_id": {"$ref": "#/$defs/sha256"},
+    "opponent_id": {"type": "string", "minLength": 1},
+    "seed": {"type": "integer", "minimum": 0},
+    "seat": {"enum": [0, 1]},
+    "status": {"enum": ["succeeded", "failed"]},
+    "metrics": {"type": "object", "additionalProperties": {"type": "number"}},
+    "provider": {"type": "string", "minLength": 1},
+    "execution_id": {"type": "string", "minLength": 1},
+    "failure": {"type": ["string", "null"]},
+    "outputs": {"type": "object", "additionalProperties": {"type": "string"}},
+    "result_id": {"$ref": "#/$defs/sha256"},
+    "schema_version": {"const": 1}
+  },
+  "$defs": {"sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+}

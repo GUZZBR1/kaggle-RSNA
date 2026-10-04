@@ -1,0 +1,6 @@
+# Fill these deployment references in the execution environment. Do not commit credentials.
+provider = "cloud"
+transport = "your-cloud-adapter"
+region = ""
+queue = ""
+artifact_store = ""

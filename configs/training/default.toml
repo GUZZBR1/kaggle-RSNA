@@ -1,0 +1,4 @@
+trainer = "unconfigured"
+device = "gpu"
+checkpoint_format = "safetensors"
+dataset_uri = ""
