@@ -12,6 +12,8 @@ Python 3.11 or newer; the core has no runtime dependencies.
 ```bash
 python -m unittest discover -s tests -v
 python -m rsna configs/experiments/smoke.toml
+python -m rsna data summary --manifest artifacts/dataset-index/manifest.json
+python -m rsna data validate --manifest artifacts/dataset-index/manifest.json --format json
 ```
 
 The CLI uses an explicitly synthetic mock provider. Its checkpoint URI and metrics are
@@ -22,3 +24,4 @@ Ray is optional: `pip install -e '.[ray]'`. Cloud and Ray providers adapt inject
 boundaries and do not provision or assume a particular vendor or cluster.
 
 See [architecture](docs/ARCHITECTURE.md) and [migration notes](docs/MIGRATION.md).
+Dataset inspection and validation commands are documented in [docs/CLI.md](docs/CLI.md).
