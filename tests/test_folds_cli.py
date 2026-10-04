@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from rsna.cli import main
 from rsna.identity import digest
-from rsna.folds.cli import load_dataset, make_plan, read_plan, validate
+from rsna.folds.cli import _leakage_records, load_dataset, make_plan, read_plan, validate
 
 
 class FoldCliTests(unittest.TestCase):
@@ -138,6 +138,131 @@ class FoldCliTests(unittest.TestCase):
         path.write_text(json.dumps(manifest), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "slice_id"):
             load_dataset(path)
+
+    def test_series_parent_study_uid_mismatch_is_preserved_and_rejected(self):
+        valid_manifest = {"studies": [
+            {"study_instance_uid": "1.2.3.A", "patient_id": "patient-A",
+             "series": [{"series_instance_uid": "1.2.3.S1", "study_instance_uid": "1.2.3.A"}],
+             "labels": {"ACL": 0}},
+            {"study_instance_uid": "1.2.3.B", "patient_id": "patient-B",
+             "series": [{"series_instance_uid": "1.2.3.S2", "study_instance_uid": "1.2.3.B"}],
+             "labels": {"ACL": 1}},
+        ]}
+        valid_path = self.root / "hierarchy-valid.json"
+        valid_path.write_text(json.dumps(valid_manifest), encoding="utf-8")
+        dataset_id, valid_studies = load_dataset(valid_path)
+        plan = make_plan(dataset_id, valid_studies, 2, "group", 42, "patient_id")
+        self.assertTrue(validate(plan, dataset_id, valid_studies)["passed"])
+
+        missing_parent = json.loads(json.dumps(valid_manifest))
+        del missing_parent["studies"][0]["series"][0]["study_instance_uid"]
+        missing_path = self.root / "hierarchy-missing-parent.json"
+        missing_path.write_text(json.dumps(missing_parent), encoding="utf-8")
+        missing_id, missing_studies = load_dataset(missing_path)
+        self.assertEqual("1.2.3.A", missing_studies[0]["series"][0]["study_instance_uid"])
+        self.assertEqual(dataset_id, missing_id)
+        self.assertTrue(validate(plan, missing_id, missing_studies)["passed"])
+
+        valid_cli_plan = self.root / "hierarchy-valid-cli-plan.json"
+        for manifest_path in (valid_path, missing_path):
+            code, output = self.invoke("generate", "--dataset-manifest", manifest_path,
+                                       "--output", valid_cli_plan, "--n-folds", 2, "--json")
+            self.assertEqual(0, code)
+            self.assertTrue(json.loads(output)["passed"])
+            for command in ("validate", "inspect"):
+                args = [command, "--fold-plan", valid_cli_plan,
+                        "--dataset-manifest", manifest_path, "--json"]
+                code, output = self.invoke(*args)
+                self.assertEqual(0, code)
+                if command == "validate":
+                    self.assertTrue(json.loads(output)["passed"])
+                else:
+                    self.assertEqual("passed", json.loads(output)["validation_status"])
+            valid_assignments = self.root / "hierarchy-valid-assignments.csv"
+            with valid_assignments.open("w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=("study_id", "fold"))
+                writer.writeheader()
+                writer.writerows({"study_id": study_id, "fold": fold}
+                                 for study_id, fold in plan["assignments"].items())
+            valid_import = self.root / f"hierarchy-valid-import-{manifest_path.stem}.json"
+            code, output = self.invoke("import", "--assignments", valid_assignments,
+                                       "--dataset-manifest", manifest_path,
+                                       "--output", valid_import, "--json")
+            self.assertEqual(0, code)
+            self.assertTrue(json.loads(output)["passed"])
+            valid_import.unlink()
+            valid_cli_plan.unlink()
+
+        mismatch_manifest = json.loads(json.dumps(valid_manifest))
+        mismatch_manifest["studies"][0]["series"][0]["study_instance_uid"] = "study-B"
+        mismatch_path = self.root / "hierarchy-mismatch.json"
+        mismatch_path.write_text(json.dumps(mismatch_manifest), encoding="utf-8")
+        mismatch_id, mismatch_studies = load_dataset(mismatch_path)
+        self.assertEqual(dataset_id, mismatch_id)
+        self.assertEqual("study-B", mismatch_studies[0]["series"][0]["study_instance_uid"])
+        report = validate(plan, mismatch_id, mismatch_studies)
+        self.assertFalse(report["passed"])
+        issues = report["leakage"]["issues"]
+        mismatch_issues = [issue for issue in issues if issue["type"] == "SERIES_STUDY_MISMATCH"]
+        self.assertTrue(mismatch_issues)
+        self.assertIn("study-A", mismatch_issues[0]["related_ids"])
+        self.assertIn("study-B", mismatch_issues[0]["related_ids"])
+
+        multiple_manifest = json.loads(json.dumps(valid_manifest))
+        multiple_manifest["studies"][0]["series"].append(
+            {"series_instance_uid": "series-A2", "study_instance_uid": "study-B"})
+        multiple_path = self.root / "hierarchy-multiple-series-mismatch.json"
+        multiple_path.write_text(json.dumps(multiple_manifest), encoding="utf-8")
+        multiple_id, multiple_studies = load_dataset(multiple_path)
+        multiple_report = validate(plan, multiple_id, multiple_studies)
+        self.assertFalse(multiple_report["passed"])
+        self.assertTrue(any(issue["type"] == "SERIES_STUDY_MISMATCH"
+                            and {"study-A", "study-B"}.issubset(issue["related_ids"])
+                            for issue in multiple_report["leakage"]["issues"]))
+
+        cross_manifest = json.loads(json.dumps(valid_manifest))
+        cross_manifest["studies"][0]["series"][0]["study_instance_uid"] = "study-B"
+        cross_manifest["studies"][1]["series"][0]["study_instance_uid"] = "study-A"
+        cross_path = self.root / "hierarchy-cross-study-mismatch.json"
+        cross_path.write_text(json.dumps(cross_manifest), encoding="utf-8")
+        cross_id, cross_studies = load_dataset(cross_path)
+        cross_report = validate(plan, cross_id, cross_studies)
+        self.assertFalse(cross_report["passed"])
+        cross_issues = [issue for issue in cross_report["leakage"]["issues"]
+                        if issue["type"] == "SERIES_STUDY_MISMATCH"]
+        self.assertEqual(2, len(cross_issues))
+        self.assertTrue(all({"study-A", "study-B"}.issubset(issue["related_ids"])
+                            for issue in cross_issues))
+
+        code, output = self.invoke("generate", "--dataset-manifest", mismatch_path,
+                                   "--output", self.output, "--n-folds", 2, "--json")
+        self.assertEqual(1, code)
+        self.assertFalse(self.output.exists())
+        self.assertFalse(json.loads(output)["passed"])
+
+        self.output.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        code, output = self.invoke("validate", "--fold-plan", self.output,
+                                   "--dataset-manifest", mismatch_path, "--json")
+        self.assertEqual(1, code)
+        self.assertFalse(json.loads(output)["passed"])
+        code, output = self.invoke("inspect", "--fold-plan", self.output,
+                                   "--dataset-manifest", mismatch_path, "--json")
+        self.assertEqual(1, code)
+        self.assertEqual("failed", json.loads(output)["validation_status"])
+
+        assignments = self.root / "hierarchy-assignments.csv"
+        with assignments.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=("study_id", "fold"))
+            writer.writeheader()
+            writer.writerows({"study_id": study_id, "fold": fold}
+                             for study_id, fold in plan["assignments"].items())
+        imported = self.root / "hierarchy-imported.json"
+        code, output = self.invoke("import", "--assignments", assignments,
+                                   "--dataset-manifest", mismatch_path,
+                                   "--output", imported, "--json")
+        self.assertEqual(1, code)
+        self.assertFalse(imported.exists())
+        self.assertFalse(json.loads(output)["passed"])
 
     def test_generation_delegates_to_canonical_generator_and_json_is_clean(self):
         from rsna.folds import generate_fold_plan as canonical_generate

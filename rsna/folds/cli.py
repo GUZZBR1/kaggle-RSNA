@@ -195,7 +195,6 @@ def _leakage_records(studies: list[dict[str, Any]], assignments: dict[str, str] 
         series_rows = []
         for series in study.get("series", []):
             item = dict(series)
-            item["study_instance_uid"] = study["study_id"]
             item["fold_id"] = fold
             item["slices"] = [{**row, "fold_id": fold} for row in item.get("slices", [])
                               if isinstance(row, dict) and
