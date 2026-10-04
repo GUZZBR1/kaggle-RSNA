@@ -22,7 +22,7 @@ result = selector.select(series_record)
 manifest_entry = result.to_dict()
 ```
 
-`uniform` distributes references over the ordered index range, including both endpoints when selecting multiple slices. `center` takes a central contiguous window; when the remaining margin is odd, it places the extra slice after the window. `physical_span` places targets evenly between the first and last physical positions and assigns the nearest real slices. Positions within the configured tolerance are treated as equivalent when avoidable, but are never removed from the source. Results include chosen indices, positions, SOP UIDs when supplied, physical spans, mean selected spacing, warnings and fallback provenance.
+`uniform` distributes references over the ordered index range, including both endpoints when selecting multiple slices. `center` takes a central contiguous window; when two windows are equally centered, it chooses the lower-index window (equivalently, an odd leftover margin leaves the extra slice after the window). `physical_span` places targets evenly between the first and last physical positions and assigns the nearest real slices. Positions within the configured tolerance are treated as equivalent when avoidable, but are never removed from the source. Results include chosen indices, positions, SOP UIDs when supplied, physical spans, mean selected spacing, warnings and fallback provenance.
 
 | Strategy | Sampling space | Typical use |
 | --- | --- | --- |

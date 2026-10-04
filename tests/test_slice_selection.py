@@ -148,6 +148,12 @@ class SliceSelectionTests(unittest.TestCase):
         modified_spec["slice_selection"]["ordering_assumption"] = "different_geometry_order_contract"
         alternative = DatasetVersion(**base, preprocessing=modified_spec).dataset_version_id
         self.assertNotEqual(identity(uniform24), alternative)
+        version = DatasetVersion(**base, preprocessing=uniform24.to_preprocessing_spec())
+        physical_version = DatasetVersion(**base, preprocessing=SliceSelectionConfig(
+            strategy="physical_span", count=24).to_preprocessing_spec())
+        self.assertNotEqual(version.dataset_version_id, physical_version.dataset_version_id)
+        self.assertEqual(version.to_dict()["target_registry_id"],
+                         physical_version.to_dict()["target_registry_id"])
 
     def test_series_and_slice_warnings_survive_selection_serialization(self):
         source = {"series_instance_uid": "series-1", "warnings": ["series geometry warning"],
@@ -248,6 +254,88 @@ class SliceSelectionTests(unittest.TestCase):
         self.assertEqual(("0", "3"), tuple(item["metadata"]["SOPInstanceUID"] for item in result.selected))
         self.assertTrue(all(item["slice_id"] for item in result.to_dict()["selected_references"]))
         json.dumps(result.to_dict())
+
+    def test_serialized_records_keep_physical_coordinates_with_duplicate_sop_uid(self):
+        record = SeriesRecord("series-duplicate-uid", "study-1", tuple(
+            SliceRecord(path, 10, {"SOPInstanceUID": "duplicate",
+                "ImagePositionPatient": [0, 0, z],
+                "ImageOrientationPatient": [1, 0, 0, 0, 1, 0]})
+            for path, z in (("a.dcm", 0), ("b.dcm", 10))))
+        serialized = json.loads(json.dumps(record.to_dict()))
+        result = SliceSelector({"strategy": "physical_span", "count": 2,
+                                "allow_fallback": False}).select(serialized)
+        self.assertEqual("geometry", result.geometry_ordering_method)
+        self.assertIsNone(result.fallback)
+        self.assertEqual((0.0, 10.0), result.selected_positions_mm)
+        self.assertEqual(("a.dcm", "b.dcm"), tuple(
+            reference["relative_path"] for reference in result.to_dict()["selected_references"]))
+        json.dumps(result.to_dict())
+
+    def test_serialized_geometry_without_uid_uses_top_level_slice_identity(self):
+        slices = [{"slice_id": f"id-{z}", "relative_path": f"{z}.dcm", "metadata": {
+            "ImagePositionPatient": [0, 0, z],
+            "ImageOrientationPatient": [1, 0, 0, 0, 1, 0]}}
+            for z in (2, 0, 1)]
+        result = SliceSelector({"strategy": "physical_span", "count": 3,
+                                "allow_fallback": False}).select(slices)
+        self.assertEqual((0.0, 1.0, 2.0), result.selected_positions_mm)
+        self.assertEqual(("0.dcm", "1.dcm", "2.dcm"), tuple(
+            reference["relative_path"] for reference in result.to_dict()["selected_references"]))
+
+    def test_serialize_reload_geometry_selection_smoke_and_strategy_matrix(self):
+        records = [SliceRecord(f"{z:03}.dcm", 10, {
+            "SOPInstanceUID": f"sop-{z:03}",
+            "ImagePositionPatient": [0, 0, float(z * 2)],
+            "ImageOrientationPatient": [1, 0, 0, 0, 1, 0]}) for z in range(100)]
+        unordered_manifest = {"series_instance_uid": "series-smoke",
+            "slices": [record.to_dict() for record in reversed(records)]}
+        reloaded = json.loads(json.dumps(unordered_manifest))
+        ordered = order_series_slices(reloaded["slices"])
+        selected = SliceSelector({"strategy": "physical_span", "count": 24,
+                                  "allow_fallback": False}).select(ordered)
+        self.assertEqual("geometry", selected.geometry_ordering_method)
+        self.assertEqual(198.0, selected.physical_span_source)
+        self.assertEqual(24, selected.actual_count)
+        self.assertEqual(1.0, selected.coverage_fraction)
+        self.assertEqual(24, len(selected.to_dict()["selected_references"]))
+        saved_selection = json.loads(json.dumps(selected.to_dict()))
+        self.assertEqual(list(selected.selected_positions_mm), saved_selection["selected_positions_mm"])
+        self.assertEqual(selected.coverage_fraction, saved_selection["coverage_fraction"])
+        self.assertEqual(selected.configuration_id, saved_selection["configuration_id"])
+        self.assertEqual(24, len(saved_selection["selected_references"]))
+        for strategy in ("uniform", "center"):
+            for count in (16, 24, 32):
+                with self.subTest(strategy=strategy, count=count):
+                    result = SliceSelector({"strategy": strategy, "count": count}).select(reloaded["slices"])
+                    self.assertEqual(count, result.actual_count)
+                    self.assertEqual(
+                        result.to_dict()["selected_references"],
+                        SliceSelector({"strategy": strategy, "count": count}).select(
+                            list(reversed(reloaded["slices"]))).to_dict()["selected_references"])
+
+    def test_short_series_boundaries_and_large_series_counts(self):
+        fifteen = select_slices(series(15), count=16)
+        self.assertEqual(15, fifteen.actual_count)
+        self.assertEqual(16, select_slices(series(15), count=16,
+                         short_series_policy="repeat_nearest").actual_count)
+        padded = select_slices(series(15), count=16, short_series_policy="pad_reference")
+        self.assertEqual(16, padded.actual_count)
+        self.assertEqual(1, padded.selected.count(None))
+        with self.assertRaises(ValueError):
+            select_slices(series(15), count=16, short_series_policy="strict")
+        self.assertEqual(16, select_slices(series(16), count=16).actual_count)
+        seventeen = select_slices(series(17), count=16, strategy="center")
+        self.assertEqual(16, seventeen.actual_count)
+        self.assertEqual(tuple(range(16)), seventeen.selected_indices)
+        for target in (16, 24, 32):
+            with self.subTest(target=target):
+                self.assertEqual(target, select_slices(series(100), count=target).actual_count)
+
+    def test_center_tie_breaks_toward_lower_middle(self):
+        even_source = select_slices(series(10), strategy="center", count=3)
+        odd_source = select_slices(series(9), strategy="center", count=4)
+        self.assertEqual((3, 4, 5), even_source.selected_indices)
+        self.assertEqual((2, 3, 4, 5), odd_source.selected_indices)
 
     def test_inconsistent_orientation_and_slice_location_require_explicit_fallback(self):
         source = [{"metadata": {"SOPInstanceUID": str(i), "InstanceNumber": i,

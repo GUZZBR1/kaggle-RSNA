@@ -126,9 +126,12 @@ class SliceSelector:
         coordinates: dict[str, set[float]] = {}
         for identifier, coordinate in ordering.diagnostics.slice_coordinates:
             coordinates.setdefault(identifier, set()).add(coordinate)
-        ordered_positions = [_geometry_coordinate(slices[index], coordinates) for index in order]
+        if len(ordering.projected_positions_mm) == len(ordering.slices):
+            ordered_positions = list(ordering.projected_positions_mm)
+        else:
+            ordered_positions = [_geometry_coordinate(slices[index], coordinates) for index in order]
         explicit_positions = tuple(_preprojected_position(item) for item in slices)
-        if not coordinates:
+        if not any(position is not None for position in ordered_positions):
             if all(value is not None for value in explicit_positions):
                 order = sorted(range(count), key=lambda i: (explicit_positions[i], _stable_key(slices[i])))
             ordered_positions = [explicit_positions[i] for i in order]
@@ -307,7 +310,11 @@ def _preprojected_position(item: Any) -> float | None:
 def _geometry_coordinate(item: Any, coordinates: Mapping[str, set[float]]) -> float | None:
     # Match geometry's coordinate identifiers for records and metadata mappings.
     metadata = _metadata(item)
-    identifier = str(getattr(item, "slice_id", "") or getattr(item, "relative_path", "") or
+    if isinstance(item, Mapping):
+        identifier = str(item.get("slice_id") or item.get("relative_path") or
+                         metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
+    else:
+        identifier = str(getattr(item, "slice_id", "") or getattr(item, "relative_path", "") or
                      metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
     values = coordinates.get(identifier, set())
     # Duplicate identifiers with distinct positions cannot be safely attributed.

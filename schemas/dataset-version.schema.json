@@ -1,1 +1,103 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"DatasetVersion v1","type":"object","required":["class_names","dataset_version_id","name","preprocessing_version","schema_version","source_manifest_sha256","synthetic","target_registry_id","target_schema_version","version"],"properties":{"name":{"type":"string"},"version":{"type":"string"},"source_manifest_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"preprocessing_version":{"type":"string"},"class_names":{"type":"array","items":{"type":"string"},"uniqueItems":true},"synthetic":{"type":"boolean"},"target_schema_version":{"const":1},"preprocessing":{"type":"object"},"uri":{"type":"string"},"schema_version":{"const":1},"dataset_version_id":{"type":"string","pattern":"^[a-f0-9]{64}$"},"target_registry_id":{"type":"string","pattern":"^[a-f0-9]{64}$"},"dataset_index_artifact_id":{"type":["string","null"],"pattern":"^[a-f0-9]{64}$"}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schema_version": {
+            "const": 2
+          }
+        },
+        "required": [
+          "schema_version"
+        ]
+      },
+      "then": {
+        "required": [
+          "synthetic",
+          "target_registry_id",
+          "target_schema_version"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "target_registry_id"
+        ]
+      },
+      "then": {
+        "required": [
+          "synthetic",
+          "target_schema_version"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "class_names": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "dataset_index_artifact_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dataset_version_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "preprocessing": {
+      "type": "object"
+    },
+    "preprocessing_version": {
+      "type": "string"
+    },
+    "schema_version": {
+      "enum": [
+        1,
+        2
+      ]
+    },
+    "source_manifest_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "synthetic": {
+      "type": "boolean"
+    },
+    "target_registry_id": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "target_schema_version": {
+      "const": 1
+    },
+    "uri": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "class_names",
+    "dataset_version_id",
+    "name",
+    "preprocessing_version",
+    "schema_version",
+    "source_manifest_sha256",
+    "version"
+  ],
+  "title": "DatasetVersion",
+  "type": "object"
+}

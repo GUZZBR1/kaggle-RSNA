@@ -141,9 +141,11 @@ class OrderingResult:
     warnings: tuple[GeometryWarning, ...]
     diagnostics: SeriesGeometry
     series_instance_uid: str | None = None
+    projected_positions_mm: tuple[float | None, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"slice_ids": [getattr(item, "slice_id", None) for item in self.slices],
+        return {"slice_ids": [_slice_id(item) for item in self.slices],
+                "projected_positions_mm": list(self.projected_positions_mm),
                 "method": self.method, "confidence": self.confidence,
                 "reversed": self.reversed, "series_instance_uid": self.series_instance_uid,
                 "warnings": [warning.to_dict() for warning in self.warnings],
@@ -314,7 +316,8 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
                 warnings.append(GeometryWarning("fallback_stable_identifier", "ordering uses SOPInstanceUID or relative path"))
 
     order = sorted(range(len(slices)), key=lambda i: keys[i])
-    ordered = tuple(slices[i] for i in order)
+    ordered_indices = list(order)
+    ordered = tuple(slices[i] for i in ordered_indices)
     sorted_coords = sorted(coords) if coords is not None else None
     duplicate_positions: list[float] = []
     zero_spacing_intervals: list[float] = []
@@ -366,7 +369,8 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
                     if last is None or abs(value - last) > config.duplicate_position_tolerance_mm:
                         keep.append(idx)
                         last = value
-                ordered = tuple(slices[i] for i in keep)
+                ordered_indices = keep
+                ordered = tuple(slices[i] for i in ordered_indices)
     if len(spacings) > 1:
         typical = median(spacings)
         irregular = min(spacings) < typical / config.spacing_outlier_factor or max(spacings) > typical * config.spacing_outlier_factor
@@ -386,8 +390,10 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
          "max_deviation_deg": max_deviation, "tolerance_deg": config.orientation_tolerance_deg},
         tuple(duplicate_positions), spacing_metadata, geometry_warnings)
     reversed_input = len(order) > 1 and order == list(range(len(slices) - 1, -1, -1))
+    projected_positions = tuple(coords[i] if coords is not None else None
+                                 for i in ordered_indices)
     return OrderingResult(ordered, method, confidence, reversed_input,
-                          geometry_warnings, diag, series_uid)
+                          geometry_warnings, diag, series_uid, projected_positions)
 
 
 def _metadata(item: Any) -> Mapping[str, Any]:
@@ -398,11 +404,17 @@ def _metadata(item: Any) -> Mapping[str, Any]:
 
 def _slice_id(item: Any) -> str:
     metadata = _metadata(item)
+    if isinstance(item, Mapping):
+        return str(item.get("slice_id") or item.get("relative_path") or
+                   metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
     return str(getattr(item, "slice_id", "") or getattr(item, "relative_path", "") or
                metadata.get("relative_path") or metadata.get("SOPInstanceUID") or "")
 
 
 def _stable_identifier(item: Any, metadata: Mapping[str, Any]) -> str:
+    if isinstance(item, Mapping):
+        return str(item.get("relative_path") or metadata.get("relative_path") or
+                   metadata.get("SOPInstanceUID") or _slice_id(item))
     return str(getattr(item, "relative_path", "") or metadata.get("relative_path") or
                metadata.get("SOPInstanceUID") or _slice_id(item))
 

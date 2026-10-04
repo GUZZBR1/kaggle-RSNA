@@ -12,7 +12,7 @@ from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage, generate_uid
 from rsna import DatasetVersion
 from rsna.data import discover_dataset, load_manifest, read_dicom_metadata, save_manifest
 from rsna.identity import digest
-from rsna.targets import TARGET_REGISTRY_ID
+from rsna.targets import TARGET_REGISTRY_ID, TARGETS
 
 
 def write_dicom(path, *, study="1.2.10", series="1.2.20", sop=None, patient="P1", missing=()):
@@ -159,13 +159,22 @@ class DatasetIndexTests(unittest.TestCase):
         self.assertNotEqual(legacy.dataset_version_id, bound.dataset_version_id)
         self.assertEqual(bound.dataset_version_id,
                          DatasetVersion.from_dict(bound.to_dict()).dataset_version_id)
-        legacy_payload = {"schema_version": legacy.schema_version, "name": legacy.name,
-            "version": legacy.version, "source_manifest_sha256": legacy.source_manifest_sha256,
-            "preprocessing_version": legacy.preprocessing_version,
-            "preprocessing": legacy.preprocessing, "class_names": legacy.class_names,
-            "synthetic": legacy.synthetic, "target_schema_version": legacy.target_schema_version,
-            "target_registry_id": TARGET_REGISTRY_ID}
-        self.assertEqual(digest(legacy_payload), legacy.dataset_version_id)
+        old_fields = {"name": "d", "version": "v1", "source_manifest_sha256": "a" * 64,
+            "preprocessing_version": "none", "preprocessing": {},
+            "class_names": ("normal",), "uri": ""}
+        legacy_id = digest({"schema_version": 1, **{key: value for key, value in old_fields.items()
+                                                     if key != "uri"}})
+        old_payload = {**old_fields, "schema_version": 1, "dataset_version_id": legacy_id}
+        restored = DatasetVersion.from_dict(old_payload)
+        self.assertEqual(1, restored.schema_version)
+        self.assertEqual(legacy_id, restored.dataset_version_id)
+        self.assertNotIn("target_registry_id", restored.to_dict())
+
+        bound_v1 = DatasetVersion("official", "v1", "c" * 64, "prep-v1", TARGETS,
+            schema_version=1, target_registry_id=TARGET_REGISTRY_ID)
+        bound_round_trip = DatasetVersion.from_dict(bound_v1.to_dict())
+        self.assertEqual(bound_v1.dataset_version_id, bound_round_trip.dataset_version_id)
+        self.assertEqual(TARGET_REGISTRY_ID, bound_round_trip.to_dict()["target_registry_id"])
 
 
 if __name__ == "__main__":
