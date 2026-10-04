@@ -125,6 +125,9 @@ class DatasetIndex:
 
     def __post_init__(self) -> None:
         studies = tuple(sorted(self.studies, key=lambda item: item.study_id))
+        study_uids = [study.study_instance_uid for study in studies if study.study_instance_uid]
+        if len(study_uids) != len(set(study_uids)):
+            raise ValueError("DatasetIndex contains duplicate StudyInstanceUID values")
         object.__setattr__(self, "studies", studies)
         object.__setattr__(self, "warnings", tuple(self.warnings))
         object.__setattr__(self, "statistics", freeze_json(self.statistics))

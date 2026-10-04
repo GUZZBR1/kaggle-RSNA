@@ -13,6 +13,7 @@ from typing import Any
 from ..contracts import DatasetVersion
 from ..folds import generate_fold_plan, load_fold_plan, save_fold_plan
 from ..identity import digest
+from ..labels import LabelRecord, StudyDatasetRecord, StudyMetadata
 from ..leakage import (LeakagePolicy, LeakageValidationError,
                        require_valid_leakage_report, validate_leakage)
 from ..targets import TARGET_REGISTRY, TARGET_REGISTRY_ID
@@ -64,7 +65,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         raise AssertionError("cold and warm index identities differ")
     save_manifest(index, root / "index" / "manifest.json")
     target_rows = _load_targets(raw / "targets.csv")
-    if len(target_rows) != index.statistics["n_studies"]:
+    index_uids = {study.study_instance_uid for study in index.studies if study.study_instance_uid}
+    if set(target_rows) != index_uids:
         raise AssertionError("synthetic labels do not cover every indexed study")
     for target in TARGETS:
         observed = {row[target] for row in target_rows.values() if row[target] is not None}
@@ -72,6 +74,14 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
             raise AssertionError(f"target {target} does not contain both hard-label values")
     target_schema_id = TARGET_REGISTRY_ID
     label_identity = digest(target_rows)
+    label_records = [LabelRecord(uid, values, "official_gold", allow_partial=True)
+                     for uid, values in sorted(target_rows.items())]
+    study_records = {study.study_instance_uid: study for study in index.studies}
+    linked_records = [StudyDatasetRecord(StudyMetadata.from_study_record(study_records[record.study_id]),
+                                         record, "a" * 64)
+                      for record in label_records]
+    if {item.study.study_id for item in linked_records} != index_uids:
+        raise AssertionError("synthetic label contracts did not link through StudyInstanceUID")
     if injection == "duplicate-sop":
         if index.statistics["duplicate_sop_uid_count"] == 0:
             raise AssertionError("duplicate SOP injection was not detected by the index")
@@ -177,7 +187,7 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
             dataset_32.dataset_version_id}) != 3:
         raise AssertionError("preprocessing changes did not alter DatasetVersion identity")
     fold_plan = generate_fold_plan(index, n_folds=5, strategy="group", random_state=seed,
-        labels=target_rows, dataset_version_id=dataset.dataset_version_id)
+        labels=label_records, dataset_version_id=dataset.dataset_version_id)
     assignments = dict(fold_plan.assignments)
     leakage_result = validate_leakage(index, assignments=assignments,
         policy=LeakagePolicy.STRICT, dataset_version_id=dataset.dataset_version_id)
@@ -271,7 +281,7 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         "synthetic-smoke-v1", tuple(TARGETS), preprocessing=preprocessing24,
         dataset_index_artifact_id=location_result.index.index_id, synthetic=True)
     location_fold_plan = generate_fold_plan(location_result.index, n_folds=5, strategy="group",
-        random_state=seed, labels=target_rows, dataset_version_id=location_dataset.dataset_version_id)
+        random_state=seed, labels=label_records, dataset_version_id=location_dataset.dataset_version_id)
     location_selections = []
     for study in location_result.index.studies:
         for series in study.series:

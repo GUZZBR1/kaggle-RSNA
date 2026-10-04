@@ -49,7 +49,14 @@ Each label record describes one study, separate from optional patient/exam metad
 `values` is canonicalized to all twelve official keys. An unprovided label is
 `None` and its corresponding `mask` entry is false; a known negative is `0`
 and its mask is true. Missing labels are never filled with zero. Partial labels
-are allowed by default and can be disabled with `allow_partial=False`.
+are disabled by default; set `allow_partial=True` to opt in.
+
+`StudyMetadata.study_id` and `LabelRecord.study_id` carry the clinical
+`StudyInstanceUID` used for joins. `StudyRecord.study_id` and the corresponding
+`DatasetIndex` IDs are content hashes used for lineage and integrity. Adapt an
+indexed study with `StudyMetadata.from_study_record()`; it requires a UID and
+retains the content hash in metadata. Fold label joins use the UID and reject
+content-hash aliases for canonical indexed studies.
 
 Hard labels accept only `0`, `1`, or `None`. Soft labels accept finite numbers
 from 0 through 1 and require `allow_soft=True`. Label type applies to the full
@@ -72,3 +79,12 @@ identity hashes. Dataset identity also includes target schema version.
 `schemas/study-metadata.schema.json`, `schemas/study-dataset-record.schema.json`, and
 the updated DatasetVersion, PredictionArtifact, Evaluation, and
 SubmissionArtifact schemas describe these serialized contracts.
+
+## Schema/runtime boundary
+
+Schemas enforce JSON-expressible invariants including official target order,
+registry identity, label ranges, and explicit soft-label opt-in. Runtime
+validation additionally checks that mask entries match null values, enforces
+cross-record UID and PatientID agreement, validates normalized alias collisions,
+and recomputes content-derived artifact IDs. JSON Schema cannot verify those
+references or recompute their identities.

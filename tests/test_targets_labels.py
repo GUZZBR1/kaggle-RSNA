@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import unittest
+from types import MappingProxyType
 
 from rsna import (ArtifactReference, DatasetVersion, Evaluation, LabelRecord,
                   ModelCandidate, PredictionArtifact, SubmissionArtifact, TARGETS,
@@ -64,6 +65,44 @@ class TargetAndLabelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "required"):
             LabelRecord("study-1", {"ACL": 1}, "official_gold", allow_partial=False)
 
+    def test_values_are_immutable_and_all_serializations_are_canonical(self):
+        values = dict.fromkeys(reversed(TARGETS), 0)
+        record = LabelRecord("uid-1", values, "official_gold")
+        record_id = record.record_id
+        self.assertIsInstance(record.values, MappingProxyType)
+        with self.assertRaises(TypeError):
+            record.values["ACL"] = 1
+        values["ACL"] = 1
+        self.assertEqual(record_id, record.record_id)
+        self.assertEqual(TARGETS, tuple(record.values))
+        self.assertEqual(TARGETS, tuple(record.to_dict()["values"]))
+        self.assertEqual(TARGETS, tuple(name for name in record.to_row() if name in TARGETS))
+
+    def test_masks_and_row_identity_are_validated(self):
+        values = dict.fromkeys(TARGETS, 0)
+        serialized = LabelRecord("uid", values, "manual_review").to_dict()
+        serialized["mask"] = [1] * len(TARGETS)
+        with self.assertRaisesRegex(ValueError, "mask"):
+            LabelRecord.from_dict(serialized)
+        row = LabelRecord("uid", values, "manual_review").to_row()
+        row["label_mask"][0] = False
+        with self.assertRaisesRegex(ValueError, "label_mask"):
+            LabelRecord.from_row(row)
+        strict = LabelRecord("uid", values, "manual_review")
+        self.assertEqual(strict.record_id, LabelRecord.from_row(strict.to_row()).record_id)
+
+    def test_alias_columns_and_study_index_adapter_use_uid(self):
+        row = {name: 0 for name in TARGETS}
+        row.pop("ACL")
+        row["Anterior Cruciate Ligament Injury"] = 1
+        row.update(StudyInstanceUID="uid", PatientID="patient", label_provenance="manual_review")
+        self.assertEqual(1, LabelRecord.from_row(row).values["ACL"])
+        with self.assertRaisesRegex(ValueError, "conflicting study identity"):
+            LabelRecord.from_row({**row, "study_id": "content-hash"})
+        with self.assertRaisesRegex(ValueError, "conflicting PatientID"):
+            StudyDatasetRecord(StudyMetadata("uid", "p1"),
+                LabelRecord("uid", dict.fromkeys(TARGETS, 0), "manual_review", patient_id="p2"), "a" * 64)
+
     def test_label_alias_duplicates_and_versions(self):
         values = {name: 0 for name in TARGETS}
         values["Anterior Cruciate Ligament"] = values.pop("ACL")
@@ -85,6 +124,17 @@ class TargetAndLabelTests(unittest.TestCase):
     def test_registry_identity_tracks_alias_definitions(self):
         changed = TargetRegistry((Target("ACL", ("different alias",)), *TARGET_REGISTRY.targets[1:]))
         self.assertNotEqual(TARGET_REGISTRY.registry_id, changed.registry_id)
+
+    def test_registry_snapshots_mutable_inputs(self):
+        aliases = ["alias"]
+        targets = [Target("One", aliases)]
+        registry = TargetRegistry(targets)
+        identity = registry.registry_id
+        aliases.append("late alias")
+        targets.append(Target("Two"))
+        self.assertEqual(identity, registry.registry_id)
+        with self.assertRaises(TypeError):
+            registry._lookup["mutated"] = "One"
 
     def test_dataset_synthetic_gate_and_identity(self):
         args = ("dataset", "v1", "a" * 64, "prep", tuple(f"class_{i:02d}" for i in range(1, 13)))
