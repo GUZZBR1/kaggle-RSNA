@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import importlib
 from pathlib import Path
 import sys
 import tomllib
@@ -99,6 +100,18 @@ def _parser() -> argparse.ArgumentParser:
                        help="keep generated DICOMs and reports in DIR (default: ./synthetic-smoke)")
     _output_options(smoke)
     smoke.set_defaults(format="json")
+    train = commands.add_parser("train", help="run model-agnostic PyTorch training")
+    train_commands = train.add_subparsers(dest="train_command", required=True)
+    train_smoke = train_commands.add_parser("smoke", help="run a deterministic synthetic training job")
+    train_smoke.add_argument("--output-dir", help="directory for checkpoint and telemetry artifacts")
+    train_smoke.add_argument("--resume-from", help="resume a prior smoke checkpoint")
+    train_smoke.add_argument("--stop-after-optimizer-steps", type=int,
+                             help="stop at an optimizer boundary and print the resume checkpoint")
+    _output_options(train_smoke)
+    train_smoke.set_defaults(format="json")
+    train_run = train_commands.add_parser("run", help="run a declared job using importable data/model factories")
+    train_run.add_argument("--job", required=True, help="JSON job document")
+    _output_options(train_run)
     parser.add_argument("--config", help="optional TOML defaults")
     parser.add_argument("--debug", action="store_true", help="show traceback for operational errors")
     parser.add_argument("--verbose", action="store_true")
@@ -161,6 +174,14 @@ def _dispatch(args: argparse.Namespace, config: dict[str, Any] | None = None) ->
             with tempfile.TemporaryDirectory(prefix="rsna-synthetic-smoke-") as temp:
                 result = run_data_smoke(temp, seed=args.seed, injection=args.inject)
         return result, 0
+    if args.group == "train":
+        if args.train_command == "smoke":
+            from .training.smoke import run_training_smoke
+            result = run_training_smoke(args.output_dir, resume_from=args.resume_from,
+                                       stop_after_optimizer_steps=args.stop_after_optimizer_steps)
+            return result, 0 if result["status"] in {"succeeded", "interrupted"} else 1
+        result = _run_training_job(Path(args.job))
+        return result, 0 if result["status"] == "succeeded" else 1
     from .inspection.query import (inspect_manifest, inspect_series, inspect_slice,
                                    inspect_study, load_dataset_index, sample_entities)
     from .inspection.summary import build_dataset_stats, build_dataset_summary
@@ -244,6 +265,45 @@ def _leakage_check(argv: list[str]) -> int:
     return 0 if report.passed or args.policy != LeakagePolicy.STRICT.value else 1
 
 
+def _load_callable(spec: str):
+    if not isinstance(spec, str) or ":" not in spec:
+        raise ValueError("factory must use module:callable syntax")
+    module_name, attribute = spec.split(":", 1)
+    value = getattr(importlib.import_module(module_name), attribute)
+    if not callable(value):
+        raise TypeError(f"configured factory {spec!r} is not callable")
+    return value
+
+
+def _run_training_job(path: Path) -> dict[str, Any]:
+    """Run a JSON-declared job through user-supplied importable factories."""
+    from .contracts import ModelCandidate, TrainingJob
+    from .training.engine import TrainingEngine
+    from .training.telemetry import JsonlTelemetrySink
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    job = TrainingJob(**document["job"])
+    candidate = ModelCandidate(**document["candidate"])
+    context = _load_callable(document["dataset_factory"])(job, document.get("dataset_configuration", {}))
+    required = {"dataset_version", "dataset_index", "fold_plan", "fold_loader"}
+    if not isinstance(context, dict) or not required.issubset(context):
+        raise TypeError(f"dataset_factory must return a mapping with {sorted(required)}")
+    artifact_dir = Path(document.get("artifact_dir", "artifacts/training"))
+    event_sink = JsonlTelemetrySink(document["telemetry_path"]) if document.get("telemetry_path") else None
+    candidate_factory = _load_callable(document["model_factory"])
+    def model_factory(training_job):
+        if training_job.model_candidate_id != candidate.model_candidate_id:
+            raise ValueError("model factory candidate does not match TrainingJob")
+        return candidate_factory(training_job, candidate)
+    engine = TrainingEngine(dataset_version=context["dataset_version"],
+        dataset_index=context["dataset_index"], fold_plan=context["fold_plan"],
+        fold_loader=context["fold_loader"], model_factory=model_factory,
+        artifact_dir=artifact_dir, event_sink=event_sink)
+    result = engine.run(job, resume_from=document.get("resume_from"),
+                        stop_after_optimizer_steps=document.get("stop_after_optimizer_steps"))
+    return result.to_dict()
+
+
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
     if args_list and args_list[0] == "folds":
@@ -257,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     if args_list and args_list[0] == "data-index":
         args_list = ["data", "index", *args_list[1:]]
     # Preserve: python -m rsna configs/experiments/smoke.toml
-    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact", "synthetic"}:
+    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact", "synthetic", "train"}:
         try:
             print(json.dumps(run_config(args_list[0]), indent=2, sort_keys=True))
             return 0
