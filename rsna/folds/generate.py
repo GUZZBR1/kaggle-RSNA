@@ -100,9 +100,20 @@ def _records(dataset: Any) -> list[dict[str, Any]]:
     result = []
     for item in source:
         row = _mapping(item)
-        study_id = row.get("study_instance_uid") or row.get("study_id") or row.get("id")
+        uid_fields = [row.get(key) for key in ("study_instance_uid", "StudyInstanceUID") if row.get(key)]
+        if len(set(uid_fields)) > 1:
+            raise ValueError("conflicting StudyInstanceUID fields in dataset record")
+        # Legacy plain mappings may use study_id as their only identifier. Canonical
+        # StudyRecord content hashes must never become a label-join key.
+        canonical_record = hasattr(item, "study_id") and hasattr(item, "study_instance_uid")
+        study_id = (uid_fields[0] if uid_fields else
+                    (row.get("study_id") or row.get("id")) if not canonical_record else None)
+        if not uid_fields and isinstance(row.get("study_id"), str):
+            content_id = row["study_id"]
+            if len(content_id) == 64 and all(char in "0123456789abcdef" for char in content_id):
+                raise ValueError("content study hash cannot be used as StudyInstanceUID")
         if not study_id:
-            raise ValueError("every study needs study_instance_uid, study_id, or id")
+            raise ValueError("every canonical study needs StudyInstanceUID for label linkage")
         series_available = "series" in row or "series_ids" in row
         series = row.get("series", row.get("series_ids", ())) or ()
         series_ids = []
@@ -238,7 +249,12 @@ def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | Any | None,
     if labels is None:
         return {}
     if isinstance(labels, (list, tuple)):
-        labels = {record.study_id: record for record in labels}
+        records = list(labels)
+        labels = {}
+        for record in records:
+            if record.study_id in labels:
+                raise ValueError(f"duplicate label records for study {record.study_id!r}")
+            labels[record.study_id] = record
     if "labels" in labels and isinstance(labels["labels"], Mapping):
         labels = labels["labels"]  # type: ignore[assignment]
     result = {}
@@ -259,6 +275,8 @@ def _normalize_labels(labels: Mapping[str, Mapping[str, Any]] | Any | None,
                 if record.study_id != study:
                     raise ValueError(f"label record key {study!r} does not match study {record.study_id!r}")
             else:
+                if targets.get("study_id", study) != study:
+                    raise ValueError(f"label record key {study!r} does not match study {targets['study_id']!r}")
                 # Reuse the canonical validation boundary, including missingness and
                 # explicit opt-in for soft supervision.
                 record = LabelRecord(study_id=str(study), values=targets["values"],

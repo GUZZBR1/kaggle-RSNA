@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 from .identity import digest
@@ -15,6 +16,9 @@ TARGET_SCHEMA_VERSION = 1
 class Target:
     name: str
     aliases: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "aliases", tuple(self.aliases))
 
 
 OFFICIAL_TARGETS = (
@@ -43,6 +47,7 @@ class TargetRegistry:
     schema_version: int = TARGET_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "targets", tuple(self.targets))
         if type(self.schema_version) is not int or self.schema_version != TARGET_SCHEMA_VERSION:
             raise ValueError(f"unsupported target schema version: {self.schema_version}")
         names = [target.name for target in self.targets]
@@ -59,7 +64,7 @@ class TargetRegistry:
                 if previous is not None and previous != target.name:
                     raise ValueError(f"ambiguous target alias: {alias!r}")
                 lookup[key] = target.name
-        object.__setattr__(self, "_lookup", lookup)
+        object.__setattr__(self, "_lookup", MappingProxyType(lookup))
 
     @property
     def names(self) -> tuple[str, ...]:

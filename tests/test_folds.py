@@ -42,6 +42,22 @@ class FoldPlanTests(unittest.TestCase):
         self.assertEqual(5, plan.statistics["total"]["n_studies"])
         self.assertEqual(5, len(plan.assignments))
 
+    def test_canonical_study_labels_join_by_uid_not_content_hash(self):
+        dataset = DatasetIndex("root", "1", tuple(
+            StudyRecord(f"uid-{i}", f"patient-{i}", ()) for i in range(4)), (), {"n_studies": 4})
+        labels = [LabelRecord(f"uid-{i}", dict.fromkeys(TARGETS, i % 2), "manual_review")
+                  for i in range(4)]
+        plan = generate_fold_plan(dataset, n_folds=2, labels=labels)
+        self.assertEqual({f"uid-{i}" for i in range(4)}, set(plan.assignments))
+        hash_keyed = [LabelRecord(study.study_id, dict.fromkeys(TARGETS, 0), "manual_review")
+                      for study in dataset.studies]
+        with self.assertRaisesRegex(ValueError, "unknown study"):
+            generate_fold_plan(dataset, n_folds=2, labels=hash_keyed)
+        with self.assertRaisesRegex(ValueError, "content study hash"):
+            generate_fold_plan([{"study_id": "a" * 64}], n_folds=2)
+        with self.assertRaisesRegex(ValueError, "duplicate label records"):
+            generate_fold_plan(dataset, n_folds=2, labels=[labels[0], labels[0]])
+
     def test_label_content_is_identity_bearing(self):
         rows = studies(10)
         first_labels = {row["study_id"]: {"ACL": 0} for row in rows}

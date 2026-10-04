@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+from types import MappingProxyType
 from typing import Any, Mapping
 
 from .identity import digest, freeze_json, jsonable
@@ -17,6 +18,14 @@ class StudyMetadata:
     study_id: str
     patient_id: str | None = None
     metadata: Mapping[str, Any] | None = None
+
+    @classmethod
+    def from_study_record(cls, study: Any) -> "StudyMetadata":
+        """Adapt an indexed study without confusing its UID with its content hash."""
+        uid = getattr(study, "study_instance_uid", None)
+        if not uid:
+            raise ValueError("study record needs StudyInstanceUID for label linkage")
+        return cls(str(uid), getattr(study, "patient_id", None), {"content_study_id": study.study_id})
 
     def __post_init__(self) -> None:
         if not isinstance(self.study_id, str) or not self.study_id.strip():
@@ -45,6 +54,8 @@ class StudyDatasetRecord:
     def __post_init__(self) -> None:
         if self.study.study_id != self.labels.study_id:
             raise ValueError("study metadata and label record must identify the same study")
+        if self.study.patient_id and self.labels.patient_id and self.study.patient_id != self.labels.patient_id:
+            raise ValueError("study metadata and label record have conflicting PatientID values")
         if (not isinstance(self.dataset_version_id, str) or len(self.dataset_version_id) != 64
                 or any(char not in "0123456789abcdef" for char in self.dataset_version_id)):
             raise ValueError("dataset_version_id must be a lowercase SHA-256 digest")
@@ -113,7 +124,8 @@ class LabelRecord:
             canonical = {name: canonical.get(name) for name in TARGETS}
         elif not self.allow_partial and any(value is None for value in canonical.values()):
             raise ValueError("missing labels are disabled by this schema")
-        object.__setattr__(self, "values", canonical)
+        canonical = {name: canonical.get(name) for name in TARGETS}
+        object.__setattr__(self, "values", MappingProxyType(canonical))
 
     @property
     def mask(self) -> tuple[bool, ...]:
@@ -142,23 +154,45 @@ class LabelRecord:
             "study_id", "values", "provenance", "label_type", "allow_partial",
             "allow_soft", "target_schema_version", "patient_id") if key in data}
         record = cls(**payload)
-        if tuple(data.get("mask", ())) != record.mask:
+        mask = data.get("mask", ())
+        if (not isinstance(mask, (list, tuple)) or len(mask) != len(TARGETS)
+                or any(type(value) is not bool for value in mask) or tuple(mask) != record.mask):
             raise ValueError("serialized label mask does not match label values")
         return record
 
     def to_row(self) -> dict[str, Any]:
-        return {"StudyInstanceUID": self.study_id, "PatientID": self.patient_id, **self.values,
+        return {"StudyInstanceUID": self.study_id, "PatientID": self.patient_id,
+                **{name: self.values[name] for name in TARGETS},
                 "label_mask": list(self.mask), "label_provenance": self.provenance,
-                "label_type": self.label_type}
+                "label_type": self.label_type, "allow_partial": self.allow_partial,
+                "allow_soft": self.allow_soft}
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "LabelRecord":
-        values = {name: _missing_to_none(row.get(name)) for name in TARGETS}
-        return cls(study_id=row.get("StudyInstanceUID", row.get("study_id", "")),
+        values = {}
+        for key, value in row.items():
+            try:
+                name = TARGET_REGISTRY.canonical_name(key)
+            except (ValueError, TypeError):
+                continue
+            if name in values:
+                raise ValueError(f"duplicate target after alias normalization: {name}")
+            values[name] = _missing_to_none(value)
+        uid_values = [row[key] for key in ("StudyInstanceUID", "study_instance_uid") if row.get(key)]
+        uid = uid_values[0] if uid_values else row.get("study_id", "")
+        if any(value != uid for value in uid_values) or (row.get("study_id") and uid_values and row["study_id"] != uid):
+            raise ValueError("conflicting study identity fields; labels must use StudyInstanceUID")
+        record = cls(study_id=uid,
                    patient_id=row.get("PatientID"), values=values,
                    provenance=row.get("label_provenance", ""),
-                   label_type=row.get("label_type", "hard"), allow_partial=True,
-                   allow_soft=row.get("label_type", "hard") == "soft")
+                   label_type=row.get("label_type", "hard"), allow_partial=row.get("allow_partial", True),
+                   allow_soft=row.get("allow_soft", row.get("label_type", "hard") == "soft"))
+        if "label_mask" in row:
+            mask = row["label_mask"]
+            if (not isinstance(mask, (list, tuple)) or len(mask) != len(TARGETS)
+                    or any(type(value) is not bool for value in mask) or tuple(mask) != record.mask):
+                raise ValueError("label_mask does not match label values")
+        return record
 
 
 def validate_label_record(record: LabelRecord | Mapping[str, Any]) -> LabelRecord:
