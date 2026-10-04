@@ -154,7 +154,12 @@ class OOFEvaluationTests(unittest.TestCase):
                                      {**payload, "rows": list(reversed(payload["rows"]))})
         first = self._evaluate()
         second = self._evaluate(shuffled)
-        self.assertEqual(first["evaluations"], second["evaluations"])
+        # The permuted payload has a different content hash and therefore
+        # different lineage IDs; its calculated metrics and normalized rows
+        # must still be identical.
+        for left, right in zip(first["evaluations"], second["evaluations"]):
+            self.assertEqual(left["macro_auc"], right["macro_auc"])
+            self.assertEqual(left["auc_by_class"], right["auc_by_class"])
         first_rows = JsonArtifactStore.load_json(ArtifactReference.from_dict(
             first["artifacts"]["oof_aggregate"]))["rows"]
         second_rows = JsonArtifactStore.load_json(ArtifactReference.from_dict(
