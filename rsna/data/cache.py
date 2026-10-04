@@ -252,4 +252,3 @@ def _write_cache(path: Path, rows: dict[str, tuple], dataset_version_id: str | N
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
-
