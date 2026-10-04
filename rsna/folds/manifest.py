@@ -45,9 +45,44 @@ def lock_fold_plan(path: str | Path) -> FoldPlanManifest:
     return locked_plan
 
 
+def validate_fold_plan_dataset(manifest: FoldPlanManifest, dataset: Any, *, policy: str = "strict") -> None:
+    """Validate a canonical plan against the current dataset using one binding check."""
+    if not isinstance(manifest, FoldPlanManifest):
+        raise TypeError("manifest must be a FoldPlanManifest")
+    from .generate import _dataset_fingerprint, _records
+
+    records = _records(dataset)
+    current_ids = {row["study_id"] for row in records}
+    missing = check_dataset_studies(manifest, current_ids, policy=policy)
+    if missing and policy == "strict":
+        raise ValueError(f"missing studies from DatasetVersion: {list(missing[:5])}")
+    fingerprints = {row["study_id"]: digest(
+        {"patient_id": row["patient_id"], "series_ids": row["series_ids"],
+         "series_available": row["series_available"], "n_slices": row["n_slices"]})
+        for row in records}
+    changed = sorted(study for study in current_ids & set(manifest.study_fingerprints)
+                     if fingerprints[study] != manifest.study_fingerprints[study])
+    if changed:
+        raise ValueError(f"study identity changed since FoldPlan generation: {changed[:5]}")
+    if _dataset_fingerprint(dataset, records) != manifest.provenance.get("dataset_fingerprint"):
+        raise ValueError("DatasetIndex identity mismatch; FoldPlan is bound to different dataset inputs")
+    object.__setattr__(manifest, "application_warnings",
+                       (f"expected studies missing from dataset: {list(missing)}",) if missing else ())
+
+
 def load_fold_plan(path: str | Path, *, dataset_version_id: str | None = None,
                    dataset: Any = None, policy: str = "strict") -> FoldPlanManifest:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    raw = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=unique_object,
+                     parse_constant=lambda value: (_ for _ in ()).throw(
+                         ValueError(f"invalid JSON constant: {value}")))
     allowed = {"schema_version", "dataset_version_id", "strategy", "n_folds", "random_state",
                "generator_version", "input_fingerprint", "provenance",
                "grouping_key", "assignments", "group_assignments", "study_groups",
@@ -61,24 +96,5 @@ def load_fold_plan(path: str | Path, *, dataset_version_id: str | None = None,
     if dataset_version_id is not None and dataset_version_id != manifest.dataset_version_id:
         raise ValueError("DatasetVersion mismatch; FoldPlan is bound to a different dataset")
     if dataset is not None:
-        from .generate import _dataset_fingerprint, _records
-        records = _records(dataset)
-        current = {row["study_id"] for row in records}
-        missing = check_dataset_studies(manifest, current, policy=policy)
-        if missing:
-            raise ValueError(f"missing studies from DatasetVersion: {list(missing[:5])}")
-        current_fingerprints = {row["study_id"]: digest(
-            {"patient_id": row["patient_id"], "series_ids": row["series_ids"],
-             "series_available": row["series_available"], "n_slices": row["n_slices"]})
-            for row in records}
-        changed = sorted(study for study in current & set(manifest.study_fingerprints)
-                         if current_fingerprints[study] != manifest.study_fingerprints[study])
-        if changed:
-            raise ValueError(f"study identity changed since FoldPlan generation: {changed[:5]}")
-        current_dataset_fingerprint = _dataset_fingerprint(dataset, records)
-        expected_dataset_fingerprint = manifest.provenance.get("dataset_fingerprint")
-        if expected_dataset_fingerprint != current_dataset_fingerprint:
-            raise ValueError("DatasetIndex identity mismatch; FoldPlan is bound to different dataset inputs")
-        object.__setattr__(manifest, "application_warnings",
-                           (f"expected studies missing from dataset: {list(missing)}",) if missing else ())
+        validate_fold_plan_dataset(manifest, dataset, policy=policy)
     return manifest

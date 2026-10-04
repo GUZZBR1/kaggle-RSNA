@@ -3,12 +3,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from typing import Any, Mapping
 
 from ..identity import digest, freeze_json, jsonable
 
 SCHEMA_VERSION = 2
 GENERATOR_VERSION = "0.1.0"
+
+
+@dataclass(frozen=True)
+class FoldGenerationConfig:
+    """Validated parameters for the canonical fold generator."""
+
+    n_folds: int = 5
+    strategy: str = "group"
+    random_state: int = 42
+    size_deviation_threshold: float = 0.20
+    prevalence_range_threshold: float = 0.20
+
+    def __post_init__(self) -> None:
+        if type(self.n_folds) is not int or self.n_folds < 2:
+            raise ValueError("n_folds must be at least 2")
+        if self.strategy not in {"group", "multilabel_group_stratified"}:
+            raise ValueError("unsupported fold strategy")
+        if type(self.random_state) is not int or self.random_state < 0:
+            raise ValueError("random_state must be a nonnegative integer")
+        for name in ("size_deviation_threshold", "prevalence_range_threshold"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be a finite nonnegative number")
 
 
 @dataclass(frozen=True)
@@ -40,12 +64,16 @@ class FoldPlanManifest:
             raise ValueError("generator_version cannot be empty")
         if not _sha(self.input_fingerprint):
             raise ValueError("input_fingerprint must be a lowercase SHA-256 digest")
-        if self.schema_version != SCHEMA_VERSION:
+        if type(self.schema_version) is not int or self.schema_version != SCHEMA_VERSION:
             raise ValueError(f"unsupported fold manifest schema version: {self.schema_version}")
         if not isinstance(self.grouping_key, str) or not self.grouping_key.strip():
             raise ValueError("grouping_key cannot be empty")
         if type(self.locked) is not bool:
             raise ValueError("locked must be a boolean")
+        if not isinstance(self.provenance, Mapping):
+            raise ValueError("provenance must be an object")
+        if not isinstance(self.configuration, Mapping) or not isinstance(self.statistics, Mapping):
+            raise ValueError("configuration and statistics must be objects")
         if self.strategy not in {"group", "multilabel_group_stratified", "imported"}:
             raise ValueError(f"unsupported fold strategy: {self.strategy}")
         if type(self.n_folds) is not int or self.n_folds < 2:

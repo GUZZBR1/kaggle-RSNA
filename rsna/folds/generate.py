@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from ..identity import digest
 from ..labels import LabelRecord
 from ..targets import TARGET_REGISTRY, TARGETS, TARGET_REGISTRY_ID
-from .models import GENERATOR_VERSION, FoldPlanManifest
+from .models import GENERATOR_VERSION, FoldGenerationConfig, FoldPlanManifest
 from .statistics import summarize
 from .validate import validate_leakage
 
@@ -18,13 +18,20 @@ def generate_fold_plan(dataset: Any, n_folds: int = 5, strategy: str = "group",
                        random_state: int = 42, labels: Mapping[str, Mapping[str, Any]] | None = None,
                        *, dataset_version_id: str | None = None, locked: bool = False,
                        size_deviation_threshold: float = 0.20,
-                       prevalence_range_threshold: float = 0.20) -> FoldPlanManifest:
+                       prevalence_range_threshold: float = 0.20,
+                       config: FoldGenerationConfig | None = None) -> FoldPlanManifest:
     """Generate a stable plan from index records or simple study mappings.
 
     Patient IDs are the indivisible unit when available, with study-level fallback for
     missing IDs. Reused SeriesInstanceUIDs connect otherwise separate units so they
     cannot cross folds. Group assignments are deterministic for a fixed input and seed.
     """
+    if config is not None:
+        if not isinstance(config, FoldGenerationConfig):
+            raise TypeError("config must be FoldGenerationConfig")
+        n_folds, strategy, random_state = config.n_folds, config.strategy, config.random_state
+        size_deviation_threshold = config.size_deviation_threshold
+        prevalence_range_threshold = config.prevalence_range_threshold
     if type(n_folds) is not int or n_folds < 2:
         raise ValueError("n_folds must be at least 2")
     if type(random_state) is not int or random_state < 0:
