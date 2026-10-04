@@ -30,7 +30,9 @@ __all__ = [
 from .contracts import (ArtifactReference, CheckpointArtifact, DatasetVersion,
     Evaluation, ExperimentSpec, FoldPlan, ModelCandidate, PredictionArtifact,
     SubmissionArtifact, TrainingJob, TrainingResult)
+from .preparation import PreparedDataset, PreparationConfig, PreparationError, prepare_dataset
 
 __all__ = ["ArtifactReference", "CheckpointArtifact", "DatasetVersion", "Evaluation",
     "ExperimentSpec", "FoldPlan", "ModelCandidate", "PredictionArtifact",
     "SubmissionArtifact", "TrainingJob", "TrainingResult"]
+__all__ += ["PreparedDataset", "PreparationConfig", "PreparationError", "prepare_dataset"]

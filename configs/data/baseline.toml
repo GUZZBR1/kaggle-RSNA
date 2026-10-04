@@ -1,0 +1,30 @@
+[data]
+root = "/dataset/rsna"
+output_dir = "./artifacts/data"
+name = "RSNA Knee Abnormality Detection"
+version = "1"
+mode = "real"
+
+[index]
+cache = true
+reuse_valid_artifacts = true
+on_invalid = "strict"
+
+[geometry]
+strict = false
+
+[orientation]
+mode = "preserve_native"
+
+[slice_selection]
+strategy = "physical_span"
+count = 24
+
+[folds]
+n_folds = 5
+strategy = "group"
+seed = 42
+
+[leakage]
+policy = "strict"
+allow_synthetic_bypass = false

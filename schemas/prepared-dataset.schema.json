@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "prepared-dataset.schema.json",
+  "title": "PreparedDataset v1",
+  "type": "object",
+  "required": [
+    "schema_version", "status", "synthetic", "dataset_version", "dataset_index",
+    "fold_plan", "fold_assignments", "target_registry", "leakage_report",
+    "preprocessing_spec", "artifacts", "statistics", "stages",
+    "preparation_manifest_uri", "lineage", "labels", "leakage_bypassed"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "status": { "enum": ["READY", "SYNTHETIC"] },
+    "synthetic": { "type": "boolean" },
+    "dataset_version": { "$ref": "dataset-version.schema.json" },
+    "dataset_index": {
+      "type": "object",
+      "required": ["manifest_schema_version", "root_identity", "discovery_version", "studies", "index_id"],
+      "properties": {
+        "manifest_schema_version": { "const": 1 },
+        "root_identity": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "discovery_version": { "type": "string", "minLength": 1 },
+        "studies": { "type": "array", "items": { "type": "object" } },
+        "index_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "additionalProperties": true
+    },
+    "fold_plan": { "$ref": "fold-plan.schema.json" },
+    "fold_assignments": { "type": "object", "minProperties": 1, "additionalProperties": { "type": "string" } },
+    "target_registry": { "$ref": "target-registry.schema.json" },
+    "leakage_report": { "$ref": "leakage-report.schema.json" },
+    "preprocessing_spec": {
+      "type": "object",
+      "required": ["preprocessing_id", "dataset_index_id", "target_schema_id", "target_registry_id", "folds"],
+      "properties": {
+        "preprocessing_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "dataset_index_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "target_schema_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "target_registry_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "folds": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "artifacts": { "type": "object", "additionalProperties": { "$ref": "artifact.schema.json" } },
+    "statistics": { "type": "object" },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["stage", "input_id", "status", "duration_seconds", "reused", "records_processed", "warnings"],
+        "properties": {
+          "stage": { "type": "string" },
+          "input_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "output_id": { "type": ["string", "null"] },
+          "status": { "enum": ["PASS", "FAILED"] },
+          "duration_seconds": { "type": "number", "minimum": 0 },
+          "reused": { "type": "boolean" },
+          "records_processed": { "type": "integer", "minimum": 0 },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "preparation_manifest_uri": { "type": "string", "minLength": 1 },
+    "labels": { "type": "object" },
+    "leakage_bypassed": { "type": "boolean" },
+    "lineage": {
+      "type": "object",
+      "required": ["source_manifest_sha256", "dataset_version_id", "dataset_index_id", "preprocessing_id", "target_schema_id", "target_registry_id", "fold_plan_id", "assignment_manifest_sha256", "leakage_report_id"],
+      "properties": {
+        "source_manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "dataset_version_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "dataset_index_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "preprocessing_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "target_schema_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "target_registry_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "fold_plan_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "assignment_manifest_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "leakage_report_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "status": { "const": "READY" } }, "required": ["status"] },
+      "then": { "properties": { "synthetic": { "const": false }, "leakage_bypassed": { "const": false }, "leakage_report": { "properties": { "passed": { "const": true } } } } } },
+    { "if": { "properties": { "status": { "const": "SYNTHETIC" } }, "required": ["status"] },
+      "then": { "properties": { "synthetic": { "const": true } } } }
+  ],
+  "additionalProperties": false
+}
