@@ -46,13 +46,17 @@ locked FoldPlan for experiment reuse
 The manifest's `fold_plan_id` hashes the dataset binding, strategy, seed, grouping,
 actual study and group assignments, statistics, warnings, and lock state. It excludes
 output path, host, and timestamp. Loading verifies this content hash and never
-regenerates assignments. `--locked` makes the saved plan immutable through the save
-API; locked manifests cannot be overwritten with a different plan.
+regenerates assignments. It records `generator_version`, `provenance`, and an
+`input_fingerprint` over the canonical dataset identity, labels, strategy, fold count,
+seed, and balance thresholds. Reload compares the full source index fingerprint and
+per-study identities. `--locked` makes the saved plan immutable through the save API;
+locked manifests cannot be overwritten with a different plan, and content edits fail
+the manifest identity check.
 
-Applying a plan checks DatasetVersion and rejects new studies under the default
-`strict` policy. Missing expected studies are returned as `application_warnings` so
-the caller can see the incomplete dataset. Creating an extension requires generating
-and saving a new plan explicitly.
+Applying a plan checks DatasetVersion and rejects both new and removed studies under
+the default `strict` policy. A changed DatasetIndex identity or changed patient,
+series, or available slice counts also rejects the plan. Creating an extension
+requires generating and saving a new plan explicitly.
 
 ## CLI
 
@@ -67,11 +71,10 @@ When study labels are available, provide a JSON object keyed by study ID whose v
 map canonical target names or registered aliases to `0`, `1`, or `null`, and select
 `--strategy multilabel-group-stratified`. To pass soft labels, use serialized
 `LabelRecord` objects with `label_type: "soft"` and `allow_soft: true`. The report
-includes per-fold and total study, patient, series, and group counts; target positive,
-negative, soft, missing, and prevalence counts; size and prevalence imbalance
-diagnostics; and warnings for rare targets.
-
-## Assignment management commands
+includes per-fold and total study, patient, series, slice, and group counts when
+available; target positive, negative, soft, missing, supervision, positive-support,
+and prevalence counts; size and prevalence imbalance diagnostics; and warnings for
+rare targets. Unknown slice counts remain `null`.
 
 The extended CLI uses the canonical Issue 6 FoldPlanManifest and generator, and calls the Issue 7 Leakage Guard for canonical index validation. It adds dataset-aware validation, inspect, stats, diff, CSV/JSON export, CSV import, and locking.
 

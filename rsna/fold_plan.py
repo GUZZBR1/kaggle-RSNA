@@ -169,7 +169,8 @@ def validate(plan: dict[str, Any], dataset_id: str | None = None,
         records = _records({"studies": studies or []})
         current_fingerprints = {row["study_id"]: digest(
             {"patient_id": row["patient_id"], "series_ids": row["series_ids"],
-             "series_available": row["series_available"]}) for row in records}
+             "series_available": row["series_available"], "n_slices": row["n_slices"]})
+            for row in records}
         changed = sorted(study for study in set(current_fingerprints) & set(plan.get("study_fingerprints", {}))
                          if current_fingerprints[study] != plan["study_fingerprints"][study])
         if changed:

@@ -12,11 +12,9 @@ from typing import Any
 
 from .fold_plan import (FoldValidationReport, UsageError, _load_dataset, _manifest,
                        diff_plans, make_plan, read_plan, save_plan, validate)
-from .folds import FoldPlanManifest
+from .folds import FoldPlanManifest, generate_fold_plan
 from .folds.generate import _groups, _records
 from .folds.statistics import summarize
-from .identity import digest
-from .targets import TARGETS, TARGET_REGISTRY_ID
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -143,19 +141,14 @@ def _import_manifest(dataset_id: str, studies: list[dict[str, Any]],
     if set(group_assignments.values()) != fold_ids:
         raise ValueError("each declared fold must contain at least one indivisible group")
     statistics, warnings = summarize(records, assignments, len(fold_ids), study_groups, labels)
-    fingerprints = {row["study_id"]: digest({"patient_id": row["patient_id"],
-                                               "series_ids": row["series_ids"],
-                                               "series_available": row["series_available"]})
-                    for row in records}
-    return FoldPlanManifest(
-        dataset_version_id=dataset_id, strategy="group", n_folds=len(fold_ids),
-        random_state=0, grouping_key=grouping_key, assignments=assignments,
-        group_assignments=group_assignments, study_groups=study_groups,
-        study_fingerprints=fingerprints,
-        configuration={"algorithm": "external_assignment_import_v1", "source": "csv",
-                       "target_order": list(TARGETS), "target_registry_id": TARGET_REGISTRY_ID,
-                       "labels_sha256": digest(labels) if labels else None},
-        statistics=statistics, warnings=tuple(warnings), locked=False)
+    generated = generate_fold_plan({"dataset_version_id": dataset_id, "studies": studies},
+                                   n_folds=len(fold_ids), strategy="group", random_state=0,
+                                   labels=labels)
+    configuration = dict(generated.configuration)
+    configuration.update({"algorithm": "external_assignment_import_v1", "source": "csv"})
+    return replace(generated, assignments=assignments, group_assignments=group_assignments,
+                   configuration=configuration, statistics=statistics,
+                   warnings=tuple(warnings), fold_plan_id="")
 
 
 def main(argv: list[str] | None = None) -> int:
