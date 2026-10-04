@@ -80,6 +80,11 @@ def _plane(normal: tuple[float, float, float], tolerance_deg: float) -> tuple[st
 
 def assess_orientation_consistency(orientations: Sequence[Any], *, tolerance_deg: float = 1.0,
                                    minor_variation_deg: float = 0.25) -> tuple[str, float | None, tuple[str, ...]]:
+    if (isinstance(tolerance_deg, bool) or not isinstance(tolerance_deg, (int, float))
+            or isinstance(minor_variation_deg, bool) or not isinstance(minor_variation_deg, (int, float))
+            or not math.isfinite(tolerance_deg) or not math.isfinite(minor_variation_deg)
+            or tolerance_deg < 0 or minor_variation_deg < 0 or minor_variation_deg > tolerance_deg):
+        raise ValueError("consistency tolerances must satisfy 0 <= minor_variation_deg <= tolerance_deg")
     parsed = [_valid_orientation(value) for value in orientations]
     valid = [item for item in parsed if item is not None]
     if not valid:
@@ -93,9 +98,11 @@ def assess_orientation_consistency(orientations: Sequence[Any], *, tolerance_deg
     deviations = []
     for row, col in valid[1:]:
         normal = (row[1]*col[2]-row[2]*col[1], row[2]*col[0]-row[0]*col[2], row[0]*col[1]-row[1]*col[0])
-        # Direction is meaningful for slice progression: do not abs() the dot.
-        cosine = max(-1.0, min(1.0, sum(a * b for a, b in zip(reference_normal, normal))))
-        deviations.append(math.degrees(math.acos(cosine)))
+        # Compare both in-plane axes as well as the signed normal. Normal-only
+        # comparison would miss slices whose pixel grid rotates within the plane.
+        for reference_axis, current_axis in zip((*reference, reference_normal), (row, col, normal)):
+            cosine = max(-1.0, min(1.0, sum(a * b for a, b in zip(reference_axis, current_axis))))
+            deviations.append(math.degrees(math.acos(cosine)))
     maximum = max(deviations, default=0.0)
     if maximum > tolerance_deg:
         return "inconsistent", maximum, ("slice orientation deviation exceeds tolerance",)

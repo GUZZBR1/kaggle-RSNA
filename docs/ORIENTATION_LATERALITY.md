@@ -36,11 +36,15 @@ direction and ordering work. Normals more than `plane_tolerance_deg` from their
 dominant cardinal axis are labeled `oblique`. Missing, malformed, non-unit, or
 non-orthogonal vectors are `unknown`.
 
-The default plane tolerance is 15 degrees. Slice consistency checks compare
-signed normals so that opposite directions are not silently treated as the same
-ordering. `orientation_consistency_tolerance_deg` defaults to 1 degree and
+The default plane tolerance is 15 degrees. Slice consistency checks compare both
+in-plane direction cosines and the signed normal. This detects grid rotations
+within the slice plane and opposite slice directions.
+`orientation_consistency_tolerance_deg` defaults to 1 degree and
 `minor_variation_deg` to 0.25 degrees. Status is `consistent`,
 `minor_variation`, `inconsistent`, or `unknown`.
+
+`PatientPosition` (for example, HFS) describes patient pose. It is not used to
+override orientation geometry or to infer laterality on its own.
 
 ## Laterality and conflicts
 

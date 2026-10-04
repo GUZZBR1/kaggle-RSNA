@@ -39,11 +39,17 @@ class OrientationTests(unittest.TestCase):
             self.assertEqual("unknown", descriptor.confidence)
 
     def test_orientation_consistency_and_determinism(self):
-        near = [1, 0, 0, 0, 0.99999, 0.004]
-        status, deviation, _ = assess_orientation_consistency([AXIAL, near])
-        self.assertIn(status, {"consistent", "minor_variation"})
+        import math
+        angle = math.radians(0.5)
+        slightly_rotated_in_plane = [math.cos(angle), math.sin(angle), 0,
+                                     -math.sin(angle), math.cos(angle), 0]
+        status, deviation, _ = assess_orientation_consistency([AXIAL, slightly_rotated_in_plane])
+        self.assertEqual("minor_variation", status)
         self.assertIsNotNone(deviation)
-        severe = [0, 1, 0, 0, 0, 1]
+        # Same slice normal but a 5-degree in-plane rotation must be detected.
+        severe_angle = math.radians(5)
+        severe = [math.cos(severe_angle), math.sin(severe_angle), 0,
+                  -math.sin(severe_angle), math.cos(severe_angle), 0]
         descriptor = describe_series_orientation([{"ImageOrientationPatient": AXIAL},
                                                   {"ImageOrientationPatient": severe}])
         self.assertEqual("inconsistent", descriptor.consistency)
@@ -84,6 +90,14 @@ class LateralityTests(unittest.TestCase):
         partial = resolve_study_laterality([{"Laterality": "L"}, {}])
         self.assertEqual("LEFT", partial.resolved)
         self.assertEqual("low", partial.confidence)
+        policy_unknown = OrientationConfig(conflict_policy="unknown")
+        unresolved_conflict = resolve_series_laterality(
+            {"Laterality": "R", "SeriesDescription": "LEFT KNEE"}, policy_unknown)
+        self.assertEqual("UNKNOWN", unresolved_conflict.resolved)
+        self.assertEqual("AMBIGUOUS", resolve_study_laterality(
+            [{"Laterality": "L"}, {"Laterality": "R", "SeriesDescription": "LEFT KNEE"}],
+            policy_unknown).resolved)
+        self.assertEqual("UNKNOWN", resolve_series_laterality({"PatientPosition": "HFS"}).resolved)
 
 
 class NormalizationTests(unittest.TestCase):
@@ -95,6 +109,7 @@ class NormalizationTests(unittest.TestCase):
         planned = build_normalization_plan(source, config=OrientationConfig(normalization_mode="left_canonical"))
         self.assertTrue(planned.requires_flip)
         self.assertEqual("unresolved", planned.flip_axis)
+        self.assertEqual("low", planned.confidence)
         self.assertIn("planned", " ".join(planned.warnings))
         json.dumps(planned.to_dict(), sort_keys=True, allow_nan=False)
         provenance = build_orientation_provenance(source, OrientationConfig(normalization_mode="left_canonical"))
