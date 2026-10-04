@@ -41,6 +41,9 @@ def run_config(path: str | Path) -> dict:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m rsna", description="Inspect and validate RSNA dataset manifests.")
     commands = parser.add_subparsers(dest="group", required=True)
+    prepare = commands.add_parser("prepare-data", help="prepare and validate a training dataset")
+    prepare.add_argument("--config", required=True, help="TOML dataset preparation configuration")
+    prepare.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     data = commands.add_parser("data", help="index, inspect, and validate dataset metadata")
     data_commands = data.add_subparsers(dest="command", required=True)
     index_command = data_commands.add_parser("index", help="discover DICOM metadata and write a manifest")
@@ -315,8 +318,50 @@ def _run_training_job(path: Path) -> dict[str, Any]:
     return result.to_dict()
 
 
+def _prepare_data(argv: list[str]) -> int:
+    from .preparation import PreparationConfig, PreparationError, prepare_dataset
+
+    parser = argparse.ArgumentParser(prog="python -m rsna prepare-data")
+    parser.add_argument("--config", required=True, help="TOML dataset preparation configuration")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    args = parser.parse_args(argv)
+    failure = None
+    try:
+        prepared = prepare_dataset(PreparationConfig.from_toml(args.config))
+    except PreparationError as exc:
+        failure = exc.to_dict()
+    except (OSError, TypeError, ValueError) as exc:
+        failure = {"status": "INVALID", "failed_stage": "CONFIG", "error": str(exc), "stages": []}
+    if failure is not None:
+        if args.json:
+            print(json.dumps(failure, indent=2, sort_keys=True))
+        else:
+            print("Dataset preparation")
+            for stage in failure["stages"]:
+                print(f"{stage['stage'].title()}: {stage['status']}")
+            print(f"{failure['failed_stage']}: {failure['status']} — {failure['error']}")
+        return 2 if failure["status"] == "INVALID" else 1
+    payload = prepared.to_dict()
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    print("Dataset preparation")
+    for stage in prepared.stages:
+        suffix = " (reused)" if stage.reused else ""
+        print(f"{stage.stage.title()}: {stage.status}{suffix}")
+        for warning in stage.warnings:
+            print(f"  Warning: {warning}")
+    print(f"DatasetVersion: {prepared.dataset_version.dataset_version_id}")
+    print(f"Dataset index: {prepared.dataset_index.index_id}")
+    print(f"FoldPlan: {prepared.fold_plan.fold_plan_id}")
+    print(f"Preprocessing: {prepared.preprocessing_spec['preprocessing_id']}")
+    print("SYNTHETIC DATASET PREPARED" if prepared.synthetic else "READY FOR TRAINING")
+    return 0
+
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
+    if args_list and args_list[0] == "prepare-data":
+        return _prepare_data(args_list[1:])
     if args_list and args_list[0] == "folds":
         from .folds.cli import main as folds_main
         return folds_main(args_list[1:])
