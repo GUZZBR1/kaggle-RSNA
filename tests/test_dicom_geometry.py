@@ -185,6 +185,8 @@ class DicomGeometryTests(unittest.TestCase):
         result = order_series_slices(series)
         self.assertEqual("geometry", result.method)
         self.assertEqual((records[1], records[2], records[0]), result.slices)
+        for actual, expected in zip(result.slices, (records[1], records[2], records[0])):
+            self.assertIs(actual, expected)
         self.assertTrue(all(not hasattr(item, "pixel_array") for item in result.slices))
 
     def test_orientation_validation_and_diagnostic_json(self):
