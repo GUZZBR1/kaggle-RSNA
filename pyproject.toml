@@ -14,6 +14,7 @@ kaggle-rsna = "rsna.cli:main"
 
 [project.optional-dependencies]
 ray = ["ray>=2.40"]
+training = ["numpy>=1.26", "torch>=2.4"]
 
 [tool.setuptools.packages.find]
 include = ["rsna*"]

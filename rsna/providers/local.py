@@ -18,16 +18,27 @@ class LocalProvider:
     def submit_training(self, job: TrainingJob) -> str:
         execution_id = f"local-{uuid4().hex}"
         try:
-            outcome = self.trainer(job)
+            run = getattr(self.trainer, "run", None)
+            outcome = run(job, execution_id=execution_id) if callable(run) else self.trainer(job)
+            if isinstance(outcome, TrainingResult):
+                expected = (job.training_job_id, job.experiment_id, job.dataset_version_id,
+                            job.fold_plan_id, job.model_candidate_id, job.fold_id)
+                actual = (outcome.training_job_id, outcome.experiment_id, outcome.dataset_version_id,
+                          outcome.fold_plan_id, outcome.model_candidate_id, outcome.fold_id)
+                if actual != expected:
+                    raise ValueError("trainer TrainingResult lineage does not match TrainingJob")
+                self._results[execution_id] = outcome
+                return execution_id
             if not isinstance(outcome, dict) or "checkpoint_uri" not in outcome:
                 raise ValueError("trainer must return checkpoint_uri and optional metrics")
             uri = str(outcome["checkpoint_uri"])
             checkpoint_sha = outcome.get("checkpoint_sha256") or digest({"uri": uri, "job": job.training_job_id})
-            artifact = ArtifactReference(checkpoint_sha, "application/octet-stream", uri,
-                                         checkpoint_sha, {"training_job_id": job.training_job_id})
+            artifact = ArtifactReference(checkpoint_sha,
+                str(outcome.get("checkpoint_media_type", "application/octet-stream")), uri,
+                checkpoint_sha, outcome.get("checkpoint_manifest", {"training_job_id": job.training_job_id}))
             checkpoint = CheckpointArtifact(artifact, job.model_candidate_id,
                 job.dataset_version_id, job.fold_plan_id, job.fold_id, job.training_job_id,
-                str(outcome.get("format", "opaque")))
+                str(outcome.get("format", "pytorch" if "checkpoint_media_type" in outcome else "opaque")))
             result = TrainingResult(job.training_job_id, job.experiment_id,
                 job.dataset_version_id, job.fold_plan_id, job.model_candidate_id,
                 job.fold_id, "succeeded", outcome.get("metrics", {}), "local",
