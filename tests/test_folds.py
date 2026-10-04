@@ -371,7 +371,7 @@ class FoldPlanTests(unittest.TestCase):
     def test_cli_creates_and_reloads_five_fold_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             source, output = Path(directory) / "dataset.json", Path(directory) / "folds.json"
-            source.write_text(json.dumps({"index_id": "dataset-v1", "studies": studies(20)}))
+            source.write_text(json.dumps({"studies": studies(20)}))
             stdout = io.StringIO()
             with contextlib.redirect_stdout(stdout):
                 code = main(["folds", "--dataset-manifest", str(source), "--output", str(output)])

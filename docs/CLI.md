@@ -28,3 +28,20 @@ The original smoke invocation remains supported:
 ```bash
 python -m rsna configs/experiments/smoke.toml
 ```
+
+## Fold plans
+
+Fold-plan operations are available under `python -m rsna folds`:
+
+```text
+generate  create, validate, summarize, and optionally save assignments
+validate  validate plan identity, dataset match, coverage, and leakage
+inspect   show plan metadata, fold statistics, or study/patient lookup
+stats     report per-fold counts and balance diagnostics
+diff      compare assignments and detect semantic split equality
+export    write assignments as CSV or JSON
+import    validate external assignments and bind them to a dataset
+lock      mark a plan as frozen for experiment reuse
+```
+
+Examples and the recommended freeze-and-reuse workflow are in [FOLDS.md](FOLDS.md). Add `--json` to any folds command for machine-readable output. Fold commands return `0` for success, `1` when a validation gate fails, and `2` for invalid command/configuration or output conflicts. With `--json`, the command writes one JSON document to stdout; warnings and errors go to stderr. Fold commands read the existing dataset index manifest and do not scan DICOM files or load pixels.

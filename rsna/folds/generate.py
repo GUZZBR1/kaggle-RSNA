@@ -103,6 +103,64 @@ def generate_fold_plan(dataset: Any, n_folds: int = 5, strategy: str = "group",
                             warnings=tuple(warnings), locked=locked)
 
 
+def create_fold_plan_from_assignments(dataset: Any, assignments: Mapping[str, str], *,
+                                      dataset_version_id: str, labels: Any = None,
+                                      locked: bool = False,
+                                      configuration: Mapping[str, Any] | None = None) -> FoldPlanManifest:
+    """Validate external assignments and bind them to the canonical FoldPlan contract."""
+    records = _records(dataset)
+    study_ids = {row["study_id"] for row in records}
+    if len(study_ids) != len(records):
+        raise ValueError("duplicate study IDs in dataset")
+    if set(assignments) != study_ids:
+        unknown, missing = sorted(set(assignments) - study_ids), sorted(study_ids - set(assignments))
+        raise ValueError(f"external assignments must cover every Study exactly; unknown={unknown[:5]}, missing={missing[:5]}")
+    n_folds = len(set(assignments.values()))
+    fold_ids = {f"fold_{index}" for index in range(n_folds)}
+    if n_folds < 2 or set(assignments.values()) != fold_ids:
+        raise ValueError("external assignments must use contiguous fold_0..fold_n IDs with at least two folds")
+    labels = _normalize_labels(labels, study_ids)
+    study_groups, group_members, grouping_key = _groups(records)
+    group_assignments: dict[str, str] = {}
+    for group, studies in group_members.items():
+        assigned_folds = {assignments[study] for study in studies}
+        if len(assigned_folds) != 1:
+            raise ValueError(f"external assignments split indivisible group {group!r}")
+        group_assignments[group] = next(iter(assigned_folds))
+    validate_leakage(records, assignments)
+    stats, stat_warnings = summarize(records, assignments, n_folds, study_groups, labels)
+    warnings = list(stat_warnings)
+    if any(not row.get("patient_id") for row in records):
+        warnings.append("some studies lack PatientID; those studies use Study grouping")
+    if not labels:
+        warnings.append("no study-level labels supplied; multilabel statistics are unavailable")
+    fingerprints = {row["study_id"]: digest({"patient_id": row["patient_id"], "series_ids": row["series_ids"],
+                                               "series_available": row["series_available"],
+                                               "n_slices": row["n_slices"]})
+                    for row in records}
+    config = {"algorithm": "external_assignment_v1", "target_order": list(TARGETS),
+              "target_registry_id": TARGET_REGISTRY_ID,
+              "labels_sha256": digest(labels) if labels else None,
+              **dict(configuration or {})}
+    dataset_fingerprint = _dataset_fingerprint(dataset, records)
+    input_fingerprint = digest({"dataset_fingerprint": dataset_fingerprint,
+                                "assignments": dict(sorted(assignments.items())),
+                                "labels": labels, "strategy": "imported", "n_folds": n_folds,
+                                "random_state": 0, "configuration": config})
+    provenance = {"generator": "rsna.folds.generate.create_fold_plan_from_assignments",
+                  "dataset_fingerprint": dataset_fingerprint,
+                  "dataset_index_id": _dataset_index_id(dataset),
+                  "dataset_version_id_explicit": True,
+                  "target_registry_id": TARGET_REGISTRY_ID}
+    return FoldPlanManifest(dataset_version_id=dataset_version_id, strategy="imported", n_folds=n_folds,
+                            generator_version=GENERATOR_VERSION, input_fingerprint=input_fingerprint,
+                            provenance=provenance,
+                            random_state=0, grouping_key=grouping_key, assignments=assignments,
+                            group_assignments=group_assignments, study_groups=study_groups,
+                            study_fingerprints=fingerprints, configuration=config,
+                            statistics=stats, warnings=tuple(warnings), locked=locked)
+
+
 def _records(dataset: Any) -> list[dict[str, Any]]:
     if hasattr(dataset, "studies"):
         source = dataset.studies
