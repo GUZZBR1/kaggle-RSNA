@@ -16,11 +16,12 @@ def summarize(records: list[dict[str, Any]], assignments: Mapping[str, str], n_f
     target_names = TARGETS if labels else ()
     series_available = any(row.get("series_available", True) for row in records)
     fold_stats = {f"fold_{i}": {"n_groups": 0, "n_patients": 0, "n_studies": 0,
+                                  "n_slices": None,
                                   "n_series": 0, "targets": {}}
                   for i in range(n_folds)}
     all_patients: dict[str, set[str]] = defaultdict(set)
     all_groups: dict[str, set[str]] = defaultdict(set)
-    counts = {fold: {target: [0, 0, 0, 0.0, 0] for target in target_names} for fold in fold_stats}
+    counts = {fold: {target: [0, 0, 0, 0.0, 0, 0] for target in target_names} for fold in fold_stats}
     for row in records:
         fold = assignments[row["study_id"]]
         target = fold_stats[fold]
@@ -39,8 +40,10 @@ def summarize(records: list[dict[str, Any]], assignments: Mapping[str, str], n_f
             elif label_type == "soft":
                 counts[fold][name][3] += float(value)
                 counts[fold][name][4] += 1
+                counts[fold][name][5] += int(float(value) > 0)
             elif value in (True, 1):
                 counts[fold][name][0] += 1
+                counts[fold][name][5] += 1
             elif value in (False, 0):
                 counts[fold][name][1] += 1
             else:
@@ -50,24 +53,34 @@ def summarize(records: list[dict[str, Any]], assignments: Mapping[str, str], n_f
             stats["n_series"] = None
         stats["n_groups"] = len(all_groups[fold])
         stats["n_patients"] = len(all_patients[fold])
-        for name, (positive, negative, missing, soft_sum, soft_count) in counts[fold].items():
+        fold_rows = [row for row in records if assignments[row["study_id"]] == fold]
+        stats["n_slices"] = (sum(row["n_slices"] for row in fold_rows)
+                             if fold_rows and all(type(row.get("n_slices")) is int for row in fold_rows)
+                             else None)
+        for name, (positive, negative, missing, soft_sum, soft_count, positive_support) in counts[fold].items():
             known = positive + negative + soft_count
             stats["targets"][name] = {"positive": positive, "negative": negative,
                                       "missing": missing,
+                                      "supervision_count": known,
+                                      "positive_support": positive_support,
                                       "soft_count": soft_count, "soft_probability_sum": soft_sum,
                                       "prevalence": (positive + soft_sum) / known if known else None}
     totals = {"n_groups": len(set(group_for_study.values())),
               "n_patients": len({str(r['patient_id']) for r in records if r.get('patient_id')}),
               "n_studies": len(records),
+              "n_slices": (sum(row["n_slices"] for row in records)
+                           if all(type(row.get("n_slices")) is int for row in records) else None),
               "n_series": sum(len(r.get("series_ids", ())) for r in records) if series_available else None,
               "targets": {}}
     for name in target_names:
         values = [counts[fold][name] for fold in fold_stats]
-        positive, negative, missing, soft_sum, soft_count = (
-            sum(value[i] for value in values) for i in range(5))
+        positive, negative, missing, soft_sum, soft_count, positive_support = (
+            sum(value[i] for value in values) for i in range(6))
         known = positive + negative + soft_count
         totals["targets"][name] = {"positive": positive, "negative": negative,
                                    "missing": missing,
+                                   "supervision_count": known,
+                                   "positive_support": positive_support,
                                    "soft_count": soft_count, "soft_probability_sum": soft_sum,
                                    "prevalence": (positive + soft_sum) / known if known else None}
     sizes = [stats["n_studies"] for stats in fold_stats.values()]
@@ -92,6 +105,7 @@ def summarize(records: list[dict[str, Any]], assignments: Mapping[str, str], n_f
         if spread > prevalence_range_threshold:
             warnings.append(f"target {name} prevalence range {spread:.3f} exceeds {prevalence_range_threshold:.3f}")
     for name, target in totals["targets"].items():
-        if 0 < target["positive"] < n_folds:
-            warnings.append(f"rare target {name} has fewer positives than folds ({target['positive']} < {n_folds})")
+        if 0 < target["positive_support"] < n_folds:
+            warnings.append(f"rare target {name} has fewer positive-support studies than folds "
+                            f"({target['positive_support']} < {n_folds})")
     return {"folds": fold_stats, "total": totals, "diagnostics": diagnostics}, warnings
