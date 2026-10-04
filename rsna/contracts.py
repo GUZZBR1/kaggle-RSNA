@@ -239,6 +239,7 @@ class TrainingJob:
     configuration: Mapping[str, Any] = field(default_factory=dict)
     schema_version: int = SCHEMA_VERSION
     training_job_id: str = ""
+    validated_leakage_report_id: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("experiment_id", "dataset_version_id", "fold_plan_id", "model_candidate_id"):
@@ -247,16 +248,21 @@ class TrainingJob:
         if type(self.random_state) is not int or self.random_state < 0:
             raise ValueError("random_state must be a nonnegative integer")
         _validate_resources(self.resources)
+        if self.validated_leakage_report_id is not None:
+            _sha256(self.validated_leakage_report_id, "validated_leakage_report_id")
         _schema(self.schema_version)
         object.__setattr__(self, "resources", freeze_json(self.resources))
         object.__setattr__(self, "configuration", freeze_json(self.configuration))
-        expected = digest({"schema_version": self.schema_version,
-                           "experiment_id": self.experiment_id,
-                           "dataset_version_id": self.dataset_version_id,
-                           "fold_plan_id": self.fold_plan_id,
-                           "model_candidate_id": self.model_candidate_id,
-                           "fold_id": self.fold_id, "random_state": self.random_state,
-                           "resources": self.resources, "configuration": self.configuration})
+        material = {"schema_version": self.schema_version,
+                    "experiment_id": self.experiment_id,
+                    "dataset_version_id": self.dataset_version_id,
+                    "fold_plan_id": self.fold_plan_id,
+                    "model_candidate_id": self.model_candidate_id,
+                    "fold_id": self.fold_id, "random_state": self.random_state,
+                    "resources": self.resources, "configuration": self.configuration}
+        if self.validated_leakage_report_id is not None:
+            material["validated_leakage_report_id"] = self.validated_leakage_report_id
+        expected = digest(material)
         _match_id(self.training_job_id, expected, "training_job_id")
         object.__setattr__(self, "training_job_id", expected)
 
@@ -267,6 +273,7 @@ class TrainingJob:
                 "model_candidate_id": self.model_candidate_id, "fold_id": self.fold_id,
                 "random_state": self.random_state, "resources": jsonable(self.resources),
                 "configuration": jsonable(self.configuration),
+                "validated_leakage_report_id": self.validated_leakage_report_id,
                 "schema_version": self.schema_version, "training_job_id": self.training_job_id}
 
 

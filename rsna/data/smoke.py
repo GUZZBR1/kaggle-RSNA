@@ -13,9 +13,11 @@ from typing import Any
 
 from ..contracts import DatasetVersion, FoldPlan
 from ..identity import canonical_json, digest
+from ..leakage import (LeakagePolicy, LeakageValidationError,
+                       require_valid_leakage_report, validate_leakage)
 from ..targets import TARGET_REGISTRY, TARGET_REGISTRY_ID
 from .cache import load_or_refresh
-from .folds import LeakageError, make_fold_assignments, validate_no_leakage
+from .folds import make_fold_assignments
 from .geometry import order_series_slices
 from .laterality import resolve_series_laterality
 from .manifest import load_manifest, save_manifest
@@ -176,19 +178,29 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
             dataset_32.dataset_version_id}) != 3:
         raise AssertionError("preprocessing changes did not alter DatasetVersion identity")
     assignments = make_fold_assignments(index, seed=seed, n_folds=5)
+    leakage_result = validate_leakage(index, assignments=assignments,
+        policy=LeakagePolicy.STRICT, dataset_version_id=dataset.dataset_version_id)
     if injection == "patient-leakage":
         patient_studies = next(study for study in index.studies if study.patient_id)
         sibling = next(study for study in index.studies
                        if study.patient_id == patient_studies.patient_id and
                        study.study_instance_uid != patient_studies.study_instance_uid)
         assignments[sibling.study_instance_uid] = "injected-leakage-fold"
+        leakage_result = validate_leakage(index, assignments=assignments,
+            policy=LeakagePolicy.STRICT, dataset_version_id=dataset.dataset_version_id)
         try:
-            validate_no_leakage(index, assignments)
-        except LeakageError:
+            require_valid_leakage_report(leakage_result)
+        except LeakageValidationError:
+            if not any(issue.type.value == "PATIENT_CROSS_FOLD" for issue in leakage_result.issues):
+                raise AssertionError("leakage injection failed for an unexpected reason")
             return _injected_summary(root, generated, injection,
-                                     "patient leakage blocked by LeakageGuard")
+                "patient leakage blocked by LeakageGuard",
+                details={"leakage_report_id": leakage_result.report_id,
+                         "issue_types": sorted({issue.type.value for issue in leakage_result.issues})})
         raise AssertionError("patient leakage injection passed the leakage guard")
-    leakage = validate_no_leakage(index, assignments)
+    require_valid_leakage_report(leakage_result)
+    leakage = leakage_result.to_dict()
+    leakage_counts = _leakage_counts(leakage_result)
     fold_ids = tuple(f"fold_{i}" for i in range(5))
     assignments_sha = hashlib.sha256(canonical_json(assignments).encode()).hexdigest()
     fold_plan = FoldPlan(dataset.dataset_version_id, "patient-grouped-kfold", fold_ids, seed,
@@ -240,7 +252,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
             reloaded_selections.append(selector24.select({"slices": ordered.slices,
                 "series_instance_uid": series.series_instance_uid,
                 "warnings": series.warnings}).to_dict())
-    reloaded_leakage = validate_no_leakage(reloaded, reloaded_assignments)
+    reloaded_leakage = validate_leakage(reloaded, assignments=reloaded_assignments,
+        policy=LeakagePolicy.STRICT, dataset_version_id=dataset.dataset_version_id)
     if reloaded.index_id != index.index_id or digest(reloaded_assignments) != digest(assignments):
         raise AssertionError("manifest or fold assignment changed across serialization")
     if (reloaded_fold_plan["fold_plan_id"] != fold_plan.fold_plan_id or
@@ -249,7 +262,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
             reloaded_target_schema["target_registry"]["targets"] != TARGET_REGISTRY.to_dict()["targets"] or
             digest(reloaded_labels) != label_identity):
         raise AssertionError("fold plan, target order or labels changed across serialization")
-    if digest(reloaded_selections) != selection_ids["physical_span_24"] or reloaded_leakage != leakage:
+    if (digest(reloaded_selections) != selection_ids["physical_span_24"] or
+            reloaded_leakage.report_id != leakage_result.report_id):
         raise AssertionError("selection or leakage output changed across serialization")
 
     second_root = root / "location-check"
@@ -284,6 +298,7 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         "preprocessing_id": preprocessing_ids["physical_span_24"],
         "preprocessing_ids": preprocessing_ids, "selection_ids": selection_ids,
         "target_schema_id": target_schema_id, "target_order": list(TARGETS), "leakage": "PASS",
+        "leakage_counts": leakage_counts, "leakage_report_id": leakage_result.report_id,
         "label_identity": label_identity,
         "patients": len({study.patient_id for study in index.studies}),
         "studies": stats["n_studies"], "series": stats["n_series"], "slices": stats["n_slices"],
@@ -308,6 +323,17 @@ def _load_targets(path: Path) -> dict[str, dict[str, int | None]]:
             result[row["study_instance_uid"]] = {name: (None if row[name] == "" else int(row[name]))
                                                 for name in TARGETS}
         return result
+
+
+def _leakage_counts(report: Any) -> dict[str, int | str]:
+    issues = report.counts["issues_by_type"]
+    return {
+        "patient_leakage": issues.get("PATIENT_CROSS_FOLD", 0),
+        "study_leakage": issues.get("STUDY_CROSS_FOLD", 0),
+        "series_leakage": issues.get("SERIES_CROSS_FOLD", 0),
+        "slice_leakage": issues.get("SLICE_CROSS_FOLD", 0),
+        "status": "PASS" if report.passed else "FAIL",
+    }
 
 
 def _write_json(path: Path, data: Any) -> None:

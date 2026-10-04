@@ -2,7 +2,7 @@
 
 from .cache import INDEX_SCHEMA_VERSION, IndexResult, RefreshReport, load_or_refresh
 from .dicom import read_dicom_metadata
-from .folds import LeakageError, make_fold_assignments, validate_no_leakage
+from .folds import make_fold_assignments
 from .geometry import GeometryConfig, OrderingResult, order_series_slices
 from .index import discover_dataset
 from .laterality import (LateralityEvidence, LateralityResolution, parse_laterality_text,
@@ -22,7 +22,7 @@ __all__ = ["INDEX_SCHEMA_VERSION", "IndexResult", "RefreshReport", "load_or_refr
            "SliceRecord", "StudyRecord", "assess_orientation_consistency", "build_normalization_plan",
            "build_orientation_provenance", "describe_series_orientation", "discover_dataset",
            "load_manifest", "parse_laterality_text", "read_dicom_metadata", "resolve_series_laterality",
-           "resolve_study_laterality", "save_manifest", "LeakageError", "make_fold_assignments",
-           "validate_no_leakage", "GeometryConfig", "OrderingResult", "order_series_slices",
+           "resolve_study_laterality", "save_manifest", "make_fold_assignments",
+           "GeometryConfig", "OrderingResult", "order_series_slices",
            "SliceSelectionConfig", "SliceSelectionResult", "SliceSelector", "select_slices",
            "run_data_smoke", "SyntheticConfig", "generate_synthetic_dataset"]

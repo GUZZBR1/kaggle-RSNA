@@ -34,6 +34,11 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
             self.assertEqual(first[key], second[key])
         self.assertEqual(first["cache"]["cold"], "cold-build")
         self.assertEqual(first["cache"]["warm"], "warm-load")
+        self.assertEqual(first["leakage_counts"], {
+            "patient_leakage": 0, "study_leakage": 0, "series_leakage": 0,
+            "slice_leakage": 0, "status": "PASS",
+        })
+        self.assertEqual(first["leakage_report_id"], second["leakage_report_id"])
 
     def test_different_seed_changes_raw_and_label_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -55,6 +60,9 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
                 else:
                     self.assertEqual(result["status"], "EXPECTED_FAILURE")
                     self.assertEqual(result["injection"], injection)
+                    if injection == "patient-leakage":
+                        self.assertIn("leakage_report_id", result)
+                        self.assertIn("PATIENT_CROSS_FOLD", result["issue_types"])
 
 
 if __name__ == "__main__":
