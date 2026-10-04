@@ -89,6 +89,17 @@ def _parser() -> argparse.ArgumentParser:
     _output_options(validate)
     validate.add_argument("--level", choices=("basic", "full"), default="full")
     validate.add_argument("--warnings-as-errors", action="store_true")
+    synthetic = commands.add_parser("synthetic", help="run synthetic data pipeline checks")
+    synthetic_commands = synthetic.add_subparsers(dest="command", required=True)
+    smoke = synthetic_commands.add_parser("smoke", help="exercise the metadata-only data pipeline")
+    smoke.add_argument("--seed", type=int, default=42)
+    smoke.add_argument("--inject", choices=("patient-leakage", "duplicate-sop",
+        "orientation-conflict", "missing-position", "missing-metadata", "spacing-irregular",
+        "corrupted-cache"))
+    smoke.add_argument("--keep", nargs="?", const="synthetic-smoke", metavar="DIR",
+                       help="keep generated DICOMs and reports in DIR (default: ./synthetic-smoke)")
+    _output_options(smoke)
+    smoke.set_defaults(format="json")
     parser.add_argument("--config", help="optional TOML defaults")
     parser.add_argument("--debug", action="store_true", help="show traceback for operational errors")
     parser.add_argument("--verbose", action="store_true")
@@ -142,6 +153,15 @@ def _emit(value: Any, output_format: str) -> None:
 
 def _dispatch(args: argparse.Namespace, config: dict[str, Any] | None = None) -> tuple[Any, int]:
     config = config or {}
+    if args.group == "synthetic":
+        import tempfile
+        from .data.smoke import run_data_smoke
+        if args.keep:
+            result = run_data_smoke(Path(args.keep), seed=args.seed, injection=args.inject)
+        else:
+            with tempfile.TemporaryDirectory(prefix="rsna-synthetic-smoke-") as temp:
+                result = run_data_smoke(temp, seed=args.seed, injection=args.inject)
+        return result, 0
     from .inspection.query import (inspect_manifest, inspect_series, inspect_slice,
                                    inspect_study, load_dataset_index, sample_entities)
     from .inspection.summary import build_dataset_stats, build_dataset_summary
@@ -240,8 +260,6 @@ def run_folds(dataset_manifest: str | Path, output: str | Path, *, n_folds: int 
 
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
-    if len(args_list) >= 2 and args_list[:2] == ["synthetic", "smoke"]:
-        return _synthetic_smoke_cli(args_list[2:])
     if args_list and args_list[0] == "folds":
         from .fold_cli import main as folds_main
         return folds_main(args_list[1:])
@@ -253,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     if args_list and args_list[0] == "data-index":
         args_list = ["data", "index", *args_list[1:]]
     # Preserve: python -m rsna configs/experiments/smoke.toml
-    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact"}:
+    if args_list and not args_list[0].startswith("-") and args_list[0] not in {"data", "artifact", "synthetic"}:
         try:
             print(json.dumps(run_config(args_list[0]), indent=2, sort_keys=True))
             return 0
@@ -321,26 +339,6 @@ def _select_slices_cli(argv: list[str]) -> int:
             result = selector.select(series, study=study)
             summaries.append(result.to_dict())
     print(json.dumps({"series_count": len(summaries), "selections": summaries}, indent=2, sort_keys=True))
-    return 0
-
-
-def _synthetic_smoke_cli(argv: list[str]) -> int:
-    import tempfile
-    parser = argparse.ArgumentParser(prog="kaggle-rsna synthetic smoke")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--inject", choices=("patient-leakage", "duplicate-sop",
-        "orientation-conflict", "missing-position", "missing-metadata", "spacing-irregular",
-        "corrupted-cache"))
-    parser.add_argument("--keep", nargs="?", const="synthetic-smoke", metavar="DIR",
-                        help="keep generated DICOMs and reports in DIR (default: ./synthetic-smoke)")
-    args = parser.parse_args(argv)
-    from .data.smoke import run_data_smoke
-    if args.keep:
-        result = run_data_smoke(Path(args.keep), seed=args.seed, injection=args.inject)
-    else:
-        with tempfile.TemporaryDirectory(prefix="rsna-synthetic-smoke-") as temp:
-            result = run_data_smoke(temp, seed=args.seed, injection=args.inject)
-    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
