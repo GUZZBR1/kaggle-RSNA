@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from rsna.data.geometry import (GeometryConfig, cross_product, order_series_slices,
                                parse_orientation, project_position)
+from rsna.data.models import SeriesRecord, SliceRecord
 
 
 AXIAL = (1, 0, 0, 0, 1, 0)
@@ -164,6 +165,29 @@ class DicomGeometryTests(unittest.TestCase):
         self.assertEqual("stable_fallback", result.method)
         self.assertEqual(["a", "b"], [s.metadata["SOPInstanceUID"] for s in result.slices])
         self.assertEqual(result.to_dict(), self.order(list(reversed(result.slices))).to_dict())
+
+    def test_ordering_consumes_canonical_slice_and_series_records(self):
+        records = (
+            SliceRecord("study/series/late.dcm", 120, {
+                "SOPInstanceUID": "1.2.3", "ImagePositionPatient": [0, 0, 10],
+                "ImageOrientationPatient": list(AXIAL), "InstanceNumber": 1,
+            }),
+            SliceRecord("study/series/first.dcm", 120, {
+                "SOPInstanceUID": "1.2.1", "ImagePositionPatient": [0, 0, 0],
+                "ImageOrientationPatient": list(AXIAL), "InstanceNumber": 3,
+            }),
+            SliceRecord("study/series/middle.dcm", 120, {
+                "SOPInstanceUID": "1.2.2", "ImagePositionPatient": [0, 0, 5],
+                "ImageOrientationPatient": list(AXIAL), "InstanceNumber": 2,
+            }),
+        )
+        series = SeriesRecord("1.2.20", "1.2.10", records)
+        result = order_series_slices(series)
+        self.assertEqual("geometry", result.method)
+        self.assertEqual((records[1], records[2], records[0]), result.slices)
+        for actual, expected in zip(result.slices, (records[1], records[2], records[0])):
+            self.assertIs(actual, expected)
+        self.assertTrue(all(not hasattr(item, "pixel_array") for item in result.slices))
 
     def test_orientation_validation_and_diagnostic_json(self):
         with self.assertRaises(ValueError):
