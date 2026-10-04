@@ -37,6 +37,11 @@ class OrientationTests(unittest.TestCase):
             descriptor = describe_series_orientation({"ImageOrientationPatient": value})
             self.assertEqual("unknown", descriptor.plane, value)
             self.assertEqual("unknown", descriptor.confidence)
+        partially_invalid_series = describe_series_orientation([
+            {"ImageOrientationPatient": [1, 0, 0]}, {"ImageOrientationPatient": AXIAL}, None])
+        self.assertEqual("axial", partially_invalid_series.plane)
+        self.assertEqual("inconsistent", partially_invalid_series.consistency)
+        self.assertEqual("medium", partially_invalid_series.confidence)
 
     def test_orientation_consistency_and_determinism(self):
         import math

@@ -34,7 +34,10 @@ and left/right respectively). This makes plane classification invariant to the
 sign of the normal; the descriptor retains the signed normal for physical
 direction and ordering work. Normals more than `plane_tolerance_deg` from their
 dominant cardinal axis are labeled `oblique`. Missing, malformed, non-unit, or
-non-orthogonal vectors are `unknown`.
+non-orthogonal vectors are `unknown` when no valid slice orientation is present.
+If a series has at least one valid vector, that geometry yields a provisional
+plane while missing or malformed slice vectors mark series consistency as
+`inconsistent` and lower confidence.
 
 The default plane tolerance is 15 degrees. Slice consistency checks compare both
 in-plane direction cosines and the signed normal. This detects grid rotations

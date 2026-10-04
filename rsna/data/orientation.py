@@ -115,14 +115,20 @@ def describe_series_orientation(series: Mapping[str, Any] | Sequence[Mapping[str
                                 config: OrientationConfig | None = None) -> OrientationDescriptor:
     config = config or OrientationConfig()
     slices = list(series) if isinstance(series, Sequence) and not isinstance(series, (str, bytes, Mapping)) else [series]
-    values = [item.get("ImageOrientationPatient") for item in slices if isinstance(item, Mapping)]
+    values = [item.get("ImageOrientationPatient") if isinstance(item, Mapping) else None for item in slices]
     warnings: list[str] = []
-    first = next((value for value in values if value is not None), None)
-    parsed = _valid_orientation(first)
+    first = None
+    parsed = None
+    for value in values:
+        if value is not None and (candidate := _valid_orientation(value)) is not None:
+            first, parsed = value, candidate
+            break
     if first is None:
+        if any(value is not None for value in values):
+            return OrientationDescriptor(None, None, None, "unknown", None, "unknown",
+                warnings=("all ImageOrientationPatient values are malformed or non-orthogonal",))
         return OrientationDescriptor(None, None, None, "unknown", None, "unknown", warnings=("missing ImageOrientationPatient",))
-    if parsed is None:
-        return OrientationDescriptor(None, None, None, "unknown", None, "unknown", warnings=("malformed or non-orthogonal ImageOrientationPatient",))
+    assert parsed is not None
     row, column = parsed
     raw = _numbers(first)
     assert raw is not None
