@@ -74,6 +74,13 @@ class DicomGeometryTests(unittest.TestCase):
             self.order([slice_at(0), slice_at(1, orientation=(0, 1, 0, 0, 0, 1))],
                        GeometryConfig(strict_geometry=True))
 
+    def test_both_direction_cosines_reversed_still_warns(self):
+        in_plane_reversed = (-1, 0, 0, 0, -1, 0)
+        result = self.order([slice_at(0), slice_at(1, orientation=in_plane_reversed)])
+        self.assertEqual((0, 0, 1), result.diagnostics.normal_vector)
+        self.assertFalse(result.diagnostics.orientation_consistency["consistent"])
+        self.assertIn("inconsistent_orientation", {w.code for w in result.warnings})
+
     def test_invalid_and_partial_positions_use_documented_fallbacks(self):
         partial = self.order([slice_at(0, instance=2), slice_at(None, instance=1)])
         self.assertEqual("instance_number", partial.method)

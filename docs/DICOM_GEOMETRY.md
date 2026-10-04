@@ -13,8 +13,9 @@ validates and normalizes their small numeric deviations, then computes
 `normal = row × column`. For each `ImagePositionPatient`, it calculates
 `coordinate = dot(position, normal)`. Slices are always sorted by ascending
 projected patient-space coordinate, independent of input and filename order. The
-normal's direction is preserved, so opposite direction cosines reverse the
-coordinate convention; they are reported as inconsistent within a series.
+normal's direction is preserved, so reversing one direction cosine reverses the
+coordinate convention. Row and column vectors are compared individually: reversing
+both keeps the same normal but is still reported as inconsistent within a series.
 
 ## Ordering tiers
 

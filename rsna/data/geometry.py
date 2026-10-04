@@ -191,15 +191,20 @@ def order_series_slices(series: Any, config: GeometryConfig | None = None) -> Or
             normals.append(None)
             warnings.append(GeometryWarning("degenerate_orientation", str(exc), (item_id,)))
     valid_normals = [normal for normal in normals if normal is not None]
+    valid_orientations = [orientation for orientation in orientations if orientation is not None]
     ref_normal = valid_normals[0] if valid_normals else None
-    deviations = [_angle_degrees(ref_normal, n) for n in valid_normals] if ref_normal else []
+    ref_orientation = valid_orientations[0] if valid_orientations else None
+    deviations = [max(_angle_degrees(ref_orientation[0], orientation[0]),
+                       _angle_degrees(ref_orientation[1], orientation[1]))
+                  for orientation in valid_orientations] if ref_orientation else []
     max_deviation = max(deviations, default=None)
     orientation_consistent = (max_deviation is None or max_deviation <= config.orientation_tolerance_deg)
     if not orientation_consistent:
         warnings.append(GeometryWarning("inconsistent_orientation",
             "slice orientations exceed the configured angular tolerance",
-            tuple(ids[i] for i, n in enumerate(normals) if n is not None and
-                  _angle_degrees(ref_normal, n) > config.orientation_tolerance_deg),
+            tuple(ids[i] for i, orientation in enumerate(orientations) if orientation is not None and
+                  max(_angle_degrees(ref_orientation[0], orientation[0]),
+                      _angle_degrees(ref_orientation[1], orientation[1])) > config.orientation_tolerance_deg),
             {"max_deviation_deg": max_deviation,
              "tolerance_deg": config.orientation_tolerance_deg}))
     if config.strict_geometry and any(w.code in {"invalid_position", "invalid_orientation",
