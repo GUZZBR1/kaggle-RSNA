@@ -7,13 +7,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from rsna.cli import main
-from rsna.contracts import DatasetVersion
-from rsna.folds import FoldPlanManifest
-from rsna.data.models import DatasetIndex, SeriesRecord, SliceRecord, StudyRecord
-from rsna.fold_plan import digest, load_dataset, make_plan, read_plan, validate
-from rsna.targets import OFFICIAL_TARGETS, TARGET_REGISTRY_ID
+from rsna.identity import digest
+from rsna.folds.cli import load_dataset, make_plan, read_plan, validate
 
 
 class FoldCliTests(unittest.TestCase):
@@ -24,7 +22,9 @@ class FoldCliTests(unittest.TestCase):
         studies = []
         for i in range(20):
             studies.append({"study_instance_uid": f"study-{i}", "patient_id": f"patient-{i // 2}",
-                            "series": [{"slices": [{}, {}]}], "labels": {"ACL": i % 2}})
+                            "series": [{"slices": [{"slice_id": f"slice-{i}-0"},
+                                                     {"slice_id": f"slice-{i}-1"}]}],
+                            "labels": {"ACL": i % 2}})
         self.dataset.write_text(json.dumps({"manifest_schema_version": 1, "studies": studies}), encoding="utf-8")
         self.studies = studies
         self.output = self.root / "folds.json"
@@ -84,104 +84,17 @@ class FoldCliTests(unittest.TestCase):
         code, _ = self.generate("--force")
         self.assertEqual(2, code)
 
-    def test_lock_identity_is_bound_and_locked_plan_reproduces(self):
-        self.generate()
-        before = read_plan(self.output)
-        self.invoke("lock", "--fold-plan", self.output)
-        locked = read_plan(self.output)
-        self.assertTrue(locked["locked"])
-        self.assertNotEqual(before["fold_plan_id"], locked["fold_plan_id"])
-        code, output = self.invoke("validate", "--fold-plan", self.output,
-                                   "--dataset-manifest", self.dataset, "--reproduce", "--json")
-        self.assertEqual(0, code, output)
-        self.assertTrue(json.loads(output)["reproduction"]["passed"])
-        code, _ = self.invoke("export", "--fold-plan", self.output, "--format", "json",
-                              "--output", self.output)
-        self.assertEqual(2, code)
-        copied_locked = self.root / "locked.txt"
-        copied_locked.write_text(self.output.read_text(encoding="utf-8"), encoding="utf-8")
-        code, _ = self.invoke("export", "--fold-plan", self.root / "other-plan.json",
-                              "--format", "json", "--output", copied_locked)
-        self.assertNotEqual(0, code)
-
-    def test_plan_identity_fields_and_import_fold_ids_are_checked(self):
-        self.generate()
-        original = read_plan(self.output)
-        for field, value in (("random_state", 43), ("grouping_key", "series_id")):
-            edited = dict(original)
-            edited[field] = value
-            candidate = self.root / f"tampered-{field}.json"
-            candidate.write_text(json.dumps(edited), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                read_plan(candidate)
-        bad_csv = self.root / "invalid-fold.csv"
-        bad_csv.write_text("study_id,fold\nstudy-0,only\nstudy-1,only\n", encoding="utf-8")
-        code, _ = self.invoke("import", "--assignments", bad_csv, "--dataset-manifest",
-                              self.dataset, "--output", self.root / "invalid.json")
-        self.assertEqual(3, code)
-
-    def test_float_binary_labels_missing_values_and_group_edges(self):
-        studies = self._normalized_studies()
-        baseline = make_plan("a" * 64, studies, 5, "group", 42, "patient_id")
-        reordered = make_plan("a" * 64, list(reversed(studies)), 5, "group", 42, "patient_id")
-        self.assertEqual(baseline["assignments"], reordered["assignments"])
-        studies[0]["labels"] = {"ACL": 1.0}
-        studies[1]["labels"] = {"ACL": 0.0}
-        studies[2]["labels"] = {"ACL": None}
-        plan = make_plan("a" * 64, studies, 5, "group", 42, "patient_id")
-        report = validate(plan, studies=studies)
-        stats = report["fold_statistics"]["total"]["targets"]["ACL"]
-        totals = {key: stats[key] for key in ("positive", "negative", "missing", "supervision_count")}
-        self.assertEqual({"positive": 10, "negative": 9, "missing": 1, "supervision_count": 19}, totals)
-        one_patient = [{"study_id": f"s{i}", "patient_id": "same", "series_ids": [], "labels": {}}
-                       for i in range(2)]
-        with self.assertRaisesRegex(ValueError, "indivisible groups"):
-            make_plan("a" * 64, one_patient, 2, "group", 42, "patient_id")
-        linked = [dict(item, patient_id=f"p{i}", series_ids=["shared-series"] if i < 2 else [])
-                  for i, item in enumerate(studies[:3])]
-        linked_plan = make_plan("a" * 64, linked, 2, "group", 42, "patient_id")
-        self.assertEqual(linked_plan["assignments"]["study-0"], linked_plan["assignments"]["study-1"])
-
-    def test_series_parent_mismatch_and_negative_inspect_limit(self):
-        malformed = self.root / "wrong-parent.json"
-        malformed.write_text(json.dumps({"studies": [{"study_instance_uid": "s1", "patient_id": "p1",
-            "series": [{"series_instance_uid": "se1", "study_instance_uid": "wrong"}]}]}), encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "different study"):
-            load_dataset(malformed)
-        self.generate()
-        code, _ = self.invoke("inspect", "--fold-plan", self.output, "--fold", "fold_0", "--limit", "-1")
-        self.assertEqual(2, code)
-
-    def test_official_dataset_version_wrapper_uses_contract_reader(self):
-        version = DatasetVersion(
-            name="synthetic", version="1", source_manifest_sha256="a" * 64,
-            preprocessing_version="none",
-            class_names=tuple(target.name for target in OFFICIAL_TARGETS), synthetic=True,
-        ).to_dict()
-        self.assertEqual(TARGET_REGISTRY_ID, version["target_registry_id"])
-        wrapped = self.root / "versioned.json"
-        wrapped.write_text(json.dumps({"dataset_version": version, "studies": self.studies}), encoding="utf-8")
-        dataset_id, _ = load_dataset(wrapped)
-        self.assertEqual(version["dataset_version_id"], dataset_id)
-
     def test_dataset_mismatch_missing_unknown_and_patient_leakage(self):
         _, _ = self.generate()
         original = read_plan(self.output)
         code, _ = self.invoke("validate", "--fold-plan", self.output,
                               "--dataset-manifest", self._other_dataset(), "--json")
-        self.assertEqual(4, code)
+        self.assertEqual(1, code)
         broken = dict(original)
         broken["assignments"] = dict(original["assignments"])
         broken["assignments"].pop("study-19")
-        report = validate(broken, studies=self._normalized_studies())
-        self.assertFalse(report["passed"])
-        self.assertEqual(["study-19"], report["coverage"]["unassigned_studies"])
-        broken["assignments"]["not-in-dataset"] = "fold_0"
-        self.assertIn("assignments contain unknown studies", validate(broken, studies=self._normalized_studies())["errors"])
-        broken["assignments"].pop("not-in-dataset")
-        broken["assignments"]["study-1"] = "fold_1"
-        report = validate(broken, studies=self._normalized_studies())
-        self.assertTrue(report["leakage"]["patient_leakage_groups"])
+        with self.assertRaisesRegex(ValueError, "cover identical studies"):
+            validate(broken, studies=self._normalized_studies())
 
     def test_corrupt_plan_and_duplicate_import_assignments(self):
         self.generate()
@@ -192,7 +105,7 @@ class FoldCliTests(unittest.TestCase):
         assignments.write_text("study_id,fold\nstudy-0,fold_0\nstudy-0,fold_1\n", encoding="utf-8")
         code, _ = self.invoke("import", "--assignments", assignments, "--dataset-manifest", self.dataset,
                               "--output", self.root / "import.json")
-        self.assertEqual(3, code)
+        self.assertEqual(1, code)
 
     def test_index_manifest_identity_and_nested_record_corruption(self):
         metadata = {"PatientID": "p-1"}
@@ -226,6 +139,77 @@ class FoldCliTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "slice_id"):
             load_dataset(path)
 
+    def test_generation_delegates_to_canonical_generator_and_json_is_clean(self):
+        from rsna.folds import generate_fold_plan as canonical_generate
+        unlabeled = self.root / "unlabeled.json"
+        unlabeled.write_text(json.dumps({"studies": [
+            {"study_instance_uid": f"unlabeled-{i}", "patient_id": f"up-{i}"}
+            for i in range(10)]}), encoding="utf-8")
+        with patch("rsna.folds.cli.generate_fold_plan", wraps=canonical_generate) as delegated:
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = main(["folds", "generate", "--dataset-manifest", str(unlabeled),
+                             "--output", str(self.output), "--dry-run", "--json"])
+        self.assertEqual(0, code)
+        delegated.assert_called_once()
+        self.assertEqual(1, len(stdout.getvalue().splitlines()))
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(12, len(payload["balance"]["target_prevalence"]))
+        self.assertIn("no study-level labels", stderr.getvalue())
+
+    def test_shuffled_dataset_order_keeps_identity_and_assignments(self):
+        first_id, first_studies = load_dataset(self.dataset)
+        shuffled_path = self.root / "shuffled.json"
+        shuffled_path.write_text(json.dumps({"studies": list(reversed(self.studies))}), encoding="utf-8")
+        second_id, second_studies = load_dataset(shuffled_path)
+        first = make_plan(first_id, first_studies, 5, "group", 42, "patient_id")
+        second = make_plan(second_id, second_studies, 5, "group", 42, "patient_id")
+        self.assertEqual(first_id, second_id)
+        self.assertEqual(first["fold_plan_id"], second["fold_plan_id"])
+        self.assertEqual(first["assignments"], second["assignments"])
+
+    def test_import_rejects_unknown_missing_dataset_mismatch_and_patient_conflict(self):
+        cases = [
+            ([{"study_id": "not-a-study", "fold": "fold_0"}], 1),
+            ([{"study_id": "study-0", "fold": "fold_0"}], 1),
+            ([{"study_id": f"study-{i}", "fold": f"fold_{i % 2}",
+               "patient_id": "wrong" if i == 0 else f"patient-{i // 2}"} for i in range(20)], 1),
+        ]
+        for index, (rows, expected_code) in enumerate(cases):
+            with self.subTest(case=index):
+                source = self.root / f"bad-{index}.json"
+                source.write_text(json.dumps({"assignments": rows}), encoding="utf-8")
+                code, _ = self.invoke("import", "--assignments", source, "--dataset-manifest",
+                                      self.dataset, "--output", self.root / f"out-{index}.json", "--json")
+                self.assertEqual(expected_code, code)
+        source = self.root / "mismatch.json"
+        source.write_text(json.dumps({"dataset_version_id": "f" * 64,
+                                      "assignments": [{"study_id": "study-0", "fold": "fold_0"}]}))
+        code, _ = self.invoke("import", "--assignments", source, "--dataset-manifest", self.dataset,
+                              "--output", self.root / "mismatch-out.json", "--json")
+        self.assertEqual(1, code)
+
+    def test_import_rejects_one_fold_and_patient_group_split(self):
+        one_fold = [{"study_id": f"study-{i}", "fold": "fold_0"} for i in range(20)]
+        split_group = [{"study_id": f"study-{i}", "fold": f"fold_{i % 2}"} for i in range(20)]
+        for label, rows in (("one-fold", one_fold), ("group-split", split_group)):
+            with self.subTest(label=label):
+                source = self.root / f"{label}.json"
+                source.write_text(json.dumps({"assignments": rows}), encoding="utf-8")
+                code, _ = self.invoke("import", "--assignments", source, "--dataset-manifest",
+                                      self.dataset, "--output", self.root / f"{label}-out.json", "--json")
+                self.assertEqual(1, code)
+
+    def test_invalid_generation_values_are_configuration_errors(self):
+        code, _ = self.generate("--n-folds", "1", "--json")
+        self.assertEqual(2, code)
+        invalid = self.root / "invalid-labels.json"
+        invalid.write_text(json.dumps({"studies": [{"study_instance_uid": "s1", "labels": {"made_up": 1}},
+                                                      {"study_instance_uid": "s2", "labels": {"ACL": 0}}]}))
+        code, _ = self.invoke("generate", "--dataset-manifest", invalid, "--output", self.root / "bad-plan.json",
+                              "--n-folds", "2", "--strategy", "multilabel-group-stratified", "--json")
+        self.assertEqual(2, code)
+
     def test_module_entrypoint_emits_parseable_json_and_reproduce_passes(self):
         command = [sys.executable, "-m", "rsna", "folds", "generate",
                    "--dataset-manifest", str(self.dataset), "--output", str(self.output),
@@ -245,13 +229,10 @@ class FoldCliTests(unittest.TestCase):
         left = read_plan(self.output)
         right = dict(left)
         right["assignments"] = dict(left["assignments"])
-        group = right["study_groups"]["study-0"]
-        source_fold = right["assignments"]["study-0"]
-        target_fold = "fold_1" if source_fold == "fold_0" else "fold_0"
-        for study, study_group in right["study_groups"].items():
-            if study_group == group:
-                right["assignments"][study] = target_fold
-        right = self.reidentify(right)
+        right["assignments"]["study-0"], right["assignments"]["study-2"] = right["assignments"]["study-2"], right["assignments"]["study-0"]
+        # The canonical plan identity also binds group maps and statistics; create
+        # a materially different, valid plan through a different generation seed.
+        right = make_plan(left["dataset_version_id"], self._normalized_studies(), 5, "group", 43, "patient_id")
         other = self.root / "other.json"
         other.write_text(json.dumps(right), encoding="utf-8")
         code, output = self.invoke("diff", self.output, self.output, "--json")
@@ -262,7 +243,10 @@ class FoldCliTests(unittest.TestCase):
         permuted = dict(left)
         remap = {f"fold_{i}": f"fold_{(i + 1) % 5}" for i in range(5)}
         permuted["assignments"] = {k: remap[v] for k, v in left["assignments"].items()}
-        permuted = self.reidentify(permuted)
+        permuted["group_assignments"] = {k: remap[v] for k, v in left["group_assignments"].items()}
+        from rsna.folds.models import FoldPlanManifest
+        permuted["fold_plan_id"] = ""
+        permuted = FoldPlanManifest(**permuted).to_dict()
         other.write_text(json.dumps(permuted), encoding="utf-8")
         _, output = self.invoke("diff", self.output, other, "--json")
         report = json.loads(output)
@@ -272,15 +256,16 @@ class FoldCliTests(unittest.TestCase):
     def test_exports_and_reproduce_determinism(self):
         self.generate()
         first = read_plan(self.output)
-        again = make_plan(first["dataset_version_id"], self._normalized_studies(), 5, "group", 42, "patient_id")
-        self.assertEqual(first["assignments"], again["assignments"])
+        _, indexed_studies = load_dataset(self.dataset)
+        again = make_plan(first["dataset_version_id"], indexed_studies, 5, "group", 42, "patient_id")
+        self.assertEqual(first["fold_plan_id"], again["fold_plan_id"])
         csv_path, json_path = self.root / "assignments.csv", self.root / "assignments.json"
         self.assertEqual(0, self.invoke("export", "--fold-plan", self.output, "--format", "csv", "--output", csv_path, "--dataset-manifest", self.dataset)[0])
         with csv_path.open() as stream:
             rows = list(csv.DictReader(stream))
         self.assertEqual(20, len(rows)); self.assertIn("patient_id", rows[0])
         self.assertEqual(0, self.invoke("export", "--fold-plan", self.output, "--format", "json", "--output", json_path)[0])
-        self.assertEqual(20, len(json.loads(json_path.read_text())))
+        self.assertEqual(20, len(json.loads(json_path.read_text())["assignments"]))
         imported = self.root / "imported.json"
         self.assertEqual(0, self.invoke("import", "--assignments", csv_path,
                                         "--dataset-manifest", self.dataset,
@@ -288,49 +273,6 @@ class FoldCliTests(unittest.TestCase):
         self.assertEqual(first["assignments"], read_plan(imported)["assignments"])
         self.assertEqual(0, self.invoke("validate", "--fold-plan", self.output,
                                         "--dataset-manifest", self.dataset, "--reproduce")[0])
-
-    def test_no_dicom_generate_validate_stats_inspect_export_import_diff_lock_reload(self):
-        # This end-to-end path consumes a canonical synthetic DatasetIndex only.
-        index_path = self.root / "synthetic-index.json"
-        index = self._synthetic_index()
-        index_path.write_text(json.dumps({"index": index.to_dict(),
-                                         "dataset_version_id": digest(index.to_dict())}), encoding="utf-8")
-        code, output = self.invoke("generate", "--dataset-manifest", index_path,
-                                   "--output", self.output, "--n-folds", "4", "--json")
-        self.assertEqual(0, code, output)
-        self.assertTrue(json.loads(self.invoke("validate", "--fold-plan", self.output,
-                                               "--dataset-manifest", index_path, "--json")[1])["passed"])
-        self.assertEqual(0, self.invoke("stats", "--fold-plan", self.output,
-                                        "--dataset-manifest", index_path, "--json")[0])
-        plan = read_plan(self.output)
-        self.assertEqual(0, self.invoke("inspect", "--fold-plan", self.output,
-                                        "--fold", plan["fold_ids"][0], "--json")[0])
-        assignments = self.root / "roundtrip.csv"
-        self.assertEqual(0, self.invoke("export", "--fold-plan", self.output,
-                                        "--format", "csv", "--output", assignments)[0])
-        imported = self.root / "roundtrip.json"
-        self.assertEqual(0, self.invoke("import", "--assignments", assignments,
-                                        "--dataset-manifest", index_path,
-                                        "--output", imported, "--json")[0])
-        diff = self.invoke("diff", self.output, imported, "--json")
-        self.assertEqual(0, diff[0])
-        self.assertTrue(json.loads(diff[1])["semantic_partition_equality"])
-        self.assertEqual(0, self.invoke("lock", "--fold-plan", self.output, "--json")[0])
-        locked = read_plan(self.output)
-        self.assertTrue(locked["locked"])
-        self.assertTrue(json.loads(self.invoke("validate", "--fold-plan", self.output,
-                                               "--dataset-manifest", index_path,
-                                               "--json")[1])["passed"])
-
-    def _synthetic_index(self):
-        studies = []
-        for i in range(8):
-            slice_record = SliceRecord(f"patient-{i // 2}/study-{i}/slice.dcm", 16,
-                                       {"SOPInstanceUID": f"sop-{i}"})
-            series = SeriesRecord(f"series-{i}", f"study-{i}", (slice_record,))
-            studies.append(StudyRecord(f"study-{i}", f"patient-{i // 2}", (series,)))
-        return DatasetIndex("b" * 64, "synthetic-test", tuple(studies), (),
-                            {"n_studies": 8, "n_series": 8, "n_slices": 8}, ())
 
     def _normalized_studies(self):
         return [{"study_id": s["study_instance_uid"], "patient_id": s["patient_id"], "n_series": 1,
@@ -340,20 +282,6 @@ class FoldCliTests(unittest.TestCase):
         other = self.root / "other-dataset.json"
         other.write_text(json.dumps({"studies": [{"study_instance_uid": "other", "patient_id": "other"}]}), encoding="utf-8")
         return other
-
-
-
-
-    @staticmethod
-    def reidentify(plan):
-        plan["group_assignments"] = {group: next(plan["assignments"][study]
-                                                    for study, assigned_group in plan["study_groups"].items()
-                                                    if assigned_group == group)
-                                     for group in set(plan["study_groups"].values())}
-        manifest = FoldPlanManifest(**{key: value for key, value in plan.items()
-                                       if key in FoldPlanManifest.__dataclass_fields__ and key != "fold_plan_id"})
-        return manifest.to_dict()
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,6 @@ from .data.geometry import GeometryConfig
 from .data.selection import SliceSelector, SliceSelectionConfig
 from .leakage import LeakagePolicy, validate_leakage
 from .providers.mock import MockProvider
-from .folds import generate_fold_plan, load_fold_plan, save_fold_plan
 
 
 def run_config(path: str | Path) -> dict:
@@ -225,25 +224,12 @@ def _leakage_check(argv: list[str]) -> int:
     return 0 if report.passed or args.policy != LeakagePolicy.STRICT.value else 1
 
 
-def run_folds(dataset_manifest: str | Path, output: str | Path, *, n_folds: int = 5,
-              strategy: str = "group", seed: int = 42,
-              labels_path: str | Path | None = None,
-              dataset_version_id: str | None = None, locked: bool = False) -> dict:
-    dataset = json.loads(Path(dataset_manifest).read_text(encoding="utf-8"))
-    labels = json.loads(Path(labels_path).read_text(encoding="utf-8")) if labels_path else None
-    plan = generate_fold_plan(dataset, n_folds, strategy, seed, labels,
-                              dataset_version_id=dataset_version_id, locked=locked)
-    save_fold_plan(plan, output)
-    reloaded = load_fold_plan(output, dataset_version_id=plan.dataset_version_id, dataset=dataset)
-    return {"plan": reloaded.to_dict(), "output": str(output)}
-
-
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
     if len(args_list) >= 2 and args_list[:2] == ["synthetic", "smoke"]:
         return _synthetic_smoke_cli(args_list[2:])
     if args_list and args_list[0] == "folds":
-        from .fold_cli import main as folds_main
+        from .folds.cli import main as folds_main
         return folds_main(args_list[1:])
     if args_list and args_list[0] == "select-slices":
         return _select_slices_cli(args_list[1:])

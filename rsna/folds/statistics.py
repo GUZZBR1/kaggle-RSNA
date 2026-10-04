@@ -13,7 +13,9 @@ def summarize(records: list[dict[str, Any]], assignments: Mapping[str, str], n_f
               *, size_deviation_threshold: float = 0.20,
               prevalence_range_threshold: float = 0.20) -> tuple[dict[str, Any], list[str]]:
     labels = labels or {}
-    target_names = TARGETS if labels else ()
+    # Keep the official target registry visible even when labels are absent;
+    # missing counts then explicitly describe the lack of supervision.
+    target_names = TARGETS
     series_available = any(row.get("series_available", True) for row in records)
     fold_stats = {f"fold_{i}": {"n_groups": 0, "n_patients": 0, "n_studies": 0,
                                   "n_slices": None,
