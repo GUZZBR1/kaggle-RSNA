@@ -1,12 +1,25 @@
 import random
 import unittest
+from dataclasses import dataclass
 
 from rsna.data.geometry import (GeometryConfig, cross_product, order_series_slices,
                                parse_orientation, project_position)
-from rsna.data.models import SeriesRecord, SliceRecord
 
 
 AXIAL = (1, 0, 0, 0, 1, 0)
+
+
+@dataclass
+class TestSlice:
+    relative_path: str
+    metadata: dict
+    slice_id: str
+
+
+@dataclass
+class TestSeries:
+    series_instance_uid: str
+    slices: tuple
 
 
 def slice_at(z=None, *, instance=None, location=None, orientation=AXIAL, uid=None):
@@ -16,12 +29,13 @@ def slice_at(z=None, *, instance=None, location=None, orientation=AXIAL, uid=Non
         metadata["ImagePositionPatient"] = (0, 0, z)
     if orientation is not None:
         metadata["ImageOrientationPatient"] = orientation
-    return SliceRecord(f"slice-{metadata['SOPInstanceUID']}.dcm", 1, metadata)
+    path = f"slice-{metadata['SOPInstanceUID']}.dcm"
+    return TestSlice(path, metadata, f"id-{path}")
 
 
 class DicomGeometryTests(unittest.TestCase):
     def order(self, slices, config=None):
-        return order_series_slices(SeriesRecord("series", "study", tuple(slices)), config)
+        return order_series_slices(TestSeries("series", tuple(slices)), config)
 
     def test_physical_order_overrides_instance_number_and_file_order(self):
         slices = [slice_at(10, instance=1), slice_at(0, instance=2), slice_at(5, instance=3)]

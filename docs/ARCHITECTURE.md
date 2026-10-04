@@ -40,7 +40,19 @@ provider-neutral. Configuration and artifact schemas are versioned. The smoke co
 placeholder class names; replace them with the competition's canonical target labels before
 real experiments.
 
-The independent `rsna.data` layer discovers DICOM headers, records Study/Series/Slice
-metadata, writes a deterministic JSON manifest, and orders slices by patient-space
-geometry when available. See [DATA_INDEX.md](DATA_INDEX.md) and
-[DICOM_GEOMETRY.md](DICOM_GEOMETRY.md).
+## DICOM metadata audit
+
+`rsna.data` provides metadata-only orientation and laterality descriptions. DICOM
+ImageOrientationPatient geometry drives anatomical plane classification; structured
+Laterality/ImageLaterality fields take precedence over conservative text-token fallback.
+Conflicting evidence remains ambiguous and is retained with warnings and confidence in
+serializable provenance. Normalization defaults to `preserve_native`; the optional
+left-canonical mode describes a future operation but does not change pixels. Any future
+applied transform must be included in `DatasetVersion.preprocessing` so dataset identity
+reflects the changed preprocessing. See [ORIENTATION_LATERALITY.md](ORIENTATION_LATERALITY.md).
+
+## Slice geometry and ordering
+
+DICOM MRI slices are ordered by ascending projection onto the normal computed from
+ImageOrientationPatient. Geometry diagnostics and deterministic whole-series fallbacks
+are documented in [DICOM_GEOMETRY.md](DICOM_GEOMETRY.md).
