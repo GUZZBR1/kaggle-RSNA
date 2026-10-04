@@ -7,6 +7,7 @@ import tempfile
 from unittest.mock import patch
 
 from rsna.contracts import DatasetVersion
+from rsna.targets import TARGET_REGISTRY
 from rsna.data.selection import SliceSelectionConfig, SliceSelector, select_slices
 from rsna.data.geometry import order_series_slices
 from rsna.data.models import SeriesRecord, SliceRecord
@@ -129,7 +130,7 @@ class SliceSelectionTests(unittest.TestCase):
         for count in (16, 24, 32, 64):
             self.assertEqual(count, select_slices(series(80), count=count).actual_count)
         base = dict(name="data", version="v1", source_manifest_sha256="a" * 64,
-                    preprocessing_version="p1", class_names=("normal", "abnormal"))
+                    preprocessing_version="p1", class_names=TARGET_REGISTRY.names)
         identity = lambda config: DatasetVersion(
             **base, preprocessing=config.to_preprocessing_spec()).dataset_version_id
         uniform24 = SliceSelectionConfig(strategy="uniform", count=24)

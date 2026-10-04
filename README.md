@@ -14,14 +14,15 @@ python -m unittest discover -s tests -v
 python -m rsna configs/experiments/smoke.toml
 ```
 
-The CLI uses an explicitly synthetic mock provider. Its checkpoint URI and metrics are
-placeholders for contract smoke tests, not model results. The twelve class labels in the
-example are configurable placeholders and should be replaced with the official labels.
+The CLI uses an explicitly synthetic mock provider and synthetic target names. Its
+checkpoint URI and metrics are placeholders for contract smoke tests, not model results.
+Real datasets and predictions use the centralized official target order.
 
 Ray is optional: `pip install -e '.[ray]'`. Cloud and Ray providers adapt injected execution
 boundaries and do not provision or assume a particular vendor or cluster.
 
-See [architecture](docs/ARCHITECTURE.md) and [migration notes](docs/MIGRATION.md).
+See [architecture](docs/ARCHITECTURE.md), [target and label contracts](docs/TARGETS_AND_LABELS.md),
+and [migration notes](docs/MIGRATION.md).
 
 Dataset metadata can be indexed without decoding image pixels:
 

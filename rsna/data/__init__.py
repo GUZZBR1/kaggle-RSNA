@@ -1,5 +1,6 @@
-"""DICOM metadata, orientation, and deterministic slice selection APIs."""
+"""RSNA MRI indexing, geometry, and persistent cache contracts."""
 
+from .cache import INDEX_SCHEMA_VERSION, IndexResult, RefreshReport, load_or_refresh
 from .dicom import read_dicom_metadata
 from .geometry import (GeometryConfig, GeometryWarning, OrderingResult, SeriesGeometry,
                        order_series_slices)
@@ -14,10 +15,10 @@ from .orientation import (OrientationDescriptor, assess_orientation_consistency,
 from .provenance import OrientationConfig, OrientationProvenance, build_orientation_provenance
 from .selection import SliceSelectionConfig, SliceSelectionResult, SliceSelector, select_slices
 
-__all__ = ["LateralityEvidence", "LateralityResolution", "NormalizationPlan",
-           "OrientationConfig", "OrientationDescriptor", "OrientationProvenance",
-           "SeriesRecord", "SliceRecord", "StudyRecord", "DatasetIndex",
-           "SliceSelectionConfig", "SliceSelectionResult", "SliceSelector",
+__all__ = ["INDEX_SCHEMA_VERSION", "IndexResult", "RefreshReport", "load_or_refresh", "DatasetIndex",
+           "LateralityEvidence", "LateralityResolution", "NormalizationPlan",
+           "OrientationConfig", "OrientationDescriptor", "OrientationProvenance", "SeriesRecord",
+           "SliceRecord", "StudyRecord", "SliceSelectionConfig", "SliceSelectionResult", "SliceSelector",
            "GeometryConfig", "OrderingResult", "SeriesGeometry", "GeometryWarning",
            "assess_orientation_consistency", "build_normalization_plan",
            "build_orientation_provenance", "describe_series_orientation", "discover_dataset",
