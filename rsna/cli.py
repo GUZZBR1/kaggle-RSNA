@@ -238,39 +238,13 @@ def run_folds(dataset_manifest: str | Path, output: str | Path, *, n_folds: int 
     return {"plan": reloaded.to_dict(), "output": str(output)}
 
 
-def _folds_cli(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="kaggle-rsna folds")
-    parser.add_argument("--dataset-manifest", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--n-folds", type=int, default=5)
-    parser.add_argument("--strategy", choices=("group", "multilabel-group-stratified"), default="group")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--labels")
-    parser.add_argument("--dataset-version-id")
-    parser.add_argument("--locked", action="store_true")
-    args = parser.parse_args(argv)
-    strategy = "multilabel_group_stratified" if args.strategy == "multilabel-group-stratified" else args.strategy
-    result = run_folds(args.dataset_manifest, args.output, n_folds=args.n_folds,
-                       strategy=strategy, seed=args.seed, labels_path=args.labels,
-                       dataset_version_id=args.dataset_version_id, locked=args.locked)
-    plan = result["plan"]
-    print(f"FoldPlan ID: {plan['fold_plan_id']}")
-    print(f"DatasetVersion: {plan['dataset_version_id']}")
-    print(f"Strategy: {plan['strategy']}\nFolds: {plan['n_folds']}")
-    for fold, stats in plan["statistics"]["folds"].items():
-        print(f"{fold}: {stats['n_studies']} studies")
-    print("Leakage: PASS")
-    for warning in plan["warnings"]:
-        print(f"Warning: {warning}")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
     if len(args_list) >= 2 and args_list[:2] == ["synthetic", "smoke"]:
         return _synthetic_smoke_cli(args_list[2:])
     if args_list and args_list[0] == "folds":
-        return _folds_cli(args_list[1:])
+        from .fold_cli import main as folds_main
+        return folds_main(args_list[1:])
     if args_list and args_list[0] == "select-slices":
         return _select_slices_cli(args_list[1:])
     if args_list and args_list[0] == "leakage-check":

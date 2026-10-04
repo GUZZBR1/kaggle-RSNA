@@ -28,3 +28,5 @@ The original smoke invocation remains supported:
 ```bash
 python -m rsna configs/experiments/smoke.toml
 ```
+
+Fold-plan management commands are documented in [FOLDS.md](FOLDS.md). Use python -m rsna folds for generation, validation, inspection, statistics, diff, import/export, and locking.
