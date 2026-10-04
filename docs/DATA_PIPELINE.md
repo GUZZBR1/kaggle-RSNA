@@ -29,13 +29,13 @@ FUTURE TRAINING CONSUMER
 
 ## Integration baseline
 
-The integration audit was repeated against the latest locally available `origin/main`
-(`d76e013`). It includes canonical discovery/indexing and SQLite incremental cache
-(Issues 1 and 8), DICOM geometry/order (Issue 2), orientation/laterality (Issue 3),
-slice selection (Issue 4), official targets/labels (Issue 5), fold generation and
-manifests (Issue 6), leakage validation (Issue 7), and metadata inspection CLI
-services (Issue 9). Issue 11 reuses those APIs and supplies only orchestration and
-the final preparation manifest.
+The integration audit was repeated against current `main` (`f0e0938`). It includes
+canonical discovery/indexing and SQLite incremental cache (Issues 1 and 8), DICOM
+geometry/order (Issue 2), orientation/laterality (Issue 3), slice selection (Issue 4),
+official targets/labels (Issue 5), canonical fold generation and hierarchy validation
+(Issue 6 and follow-up fixes), leakage validation (Issue 7), metadata inspection CLI
+services (Issue 9), and the resumable Training Engine. Issue 11 reuses those APIs and
+supplies orchestration plus the final preparation manifest.
 
 | Component | Main status and API | Inputs → outputs | Integration decision |
 | --- | --- | --- | --- |
