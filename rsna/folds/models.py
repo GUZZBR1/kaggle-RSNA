@@ -46,7 +46,7 @@ class FoldPlanManifest:
             raise ValueError("grouping_key cannot be empty")
         if type(self.locked) is not bool:
             raise ValueError("locked must be a boolean")
-        if self.strategy not in {"group", "multilabel_group_stratified"}:
+        if self.strategy not in {"group", "multilabel_group_stratified", "imported"}:
             raise ValueError(f"unsupported fold strategy: {self.strategy}")
         if type(self.n_folds) is not int or self.n_folds < 2:
             raise ValueError("n_folds must be at least 2")
