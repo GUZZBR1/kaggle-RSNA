@@ -45,3 +45,14 @@ lock      mark a plan as frozen for experiment reuse
 ```
 
 Examples and the recommended freeze-and-reuse workflow are in [FOLDS.md](FOLDS.md). Add `--json` to any folds command for machine-readable output. Fold commands return `0` for success, `1` when a validation gate fails, and `2` for invalid command/configuration or output conflicts. With `--json`, the command writes one JSON document to stdout; warnings and errors go to stderr. Fold commands read the existing dataset index manifest and do not scan DICOM files or load pixels.
+
+## CNN-224 baseline
+
+The CNN-224 run reuses a saved DatasetVersion, DatasetIndex, canonical FoldPlan, and LabelRecords. Copy and edit `configs/models/cnn224-baseline.toml` to point to those files, the DICOM root, and an explicit `StudyInstanceUID` to `SeriesInstanceUID` map. Then run:
+
+```bash
+python -m rsna baseline cnn224 smoke --json
+python -m rsna baseline cnn224 run --config configs/models/cnn224-baseline.toml --json
+```
+
+The smoke is CPU-only and synthetic. The real run requires five folds and the optional PyTorch training dependencies; its configured `device = "cuda:0"` is strict and fails if CUDA is unavailable. The command validates the existing LeakageGuard boundary, trains one model per held-out fold with `TrainingEngine`, reloads each fold checkpoint, emits validation-only OOF `PredictionArtifact`s, and calls the OOF Evaluation Engine. Details and input policies are in [CNN224_BASELINE.md](CNN224_BASELINE.md).

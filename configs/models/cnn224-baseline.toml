@@ -1,0 +1,51 @@
+# Copy this template and replace input paths with the already versioned RSNA
+# DatasetVersion, DatasetIndex, five-fold manifest, hard labels, and series map.
+
+[output]
+output_dir = "../../artifacts/cnn224"
+
+[inputs]
+dataset_root = "../../data/rsna"
+dataset_index = "../../artifacts/dataset-index/manifest.json"
+dataset_version = "../../artifacts/dataset-version.json"
+fold_plan = "../../artifacts/folds/fold-plan.json"
+labels = "../../artifacts/labels.json"
+selected_series = "../../artifacts/selected-series.json"
+
+[resources]
+cpus = 4
+gpus = 1
+
+[model]
+architecture = "cnn224_slice_encoder_v1"
+input_size = 224
+slice_count = 24
+pooling = "mean"
+channels = [16, 32, 64]
+pretrained = false
+# When pretrained=true, pretrained_weights must point to a local compatible
+# state dict; its content hash enters ModelCandidate identity. No download occurs.
+
+[data]
+# One explicit SeriesInstanceUID per StudyInstanceUID is required by selected_series.
+series_policy = "explicit_manifest"
+
+[training]
+seed = 42
+epochs = 5
+batch_size = 1
+learning_rate = 0.0002
+optimizer = "adamw"
+scheduler = "cosine"
+scheduler_interval = "epoch"
+accumulation_steps = 8
+checkpoint_every_steps = 1
+gradient_clip_norm = 1.0
+device = "cuda:0"
+amp = true
+amp_dtype = "float16"
+deterministic = true
+num_workers = 0
+
+[training.optimizer_options]
+weight_decay = 0.0001

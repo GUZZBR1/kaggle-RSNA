@@ -112,6 +112,12 @@ class FoldTensorDataset:
                 row = {"entity_type": "slice", "study_id": record.study_id,
                        "study_uid": record.study_id, "slice_id": sop_id, "sop_uid": sop_id,
                        "patient_id": record.patient_id, "fold_id": fold_id}
+                if len(record.series_ids) == 1:
+                    # A StudyTensorRecord with one selected Series can bind every
+                    # selected SOP to that parent. Multi-series records need an
+                    # explicit per-slice mapping and remain rejected as unbound.
+                    row.update(series_id=record.series_ids[0],
+                               series_uid=record.series_ids[0])
                 identity_records.append(row)
             for file_hash in record.file_hashes:
                 row = {"entity_type": "slice", "study_id": record.study_id,
