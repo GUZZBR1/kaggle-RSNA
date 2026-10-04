@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from collections import deque
+from dataclasses import dataclass, field
 import math
 from typing import Any, Mapping, Sequence
+
+ORDERING_ASSUMPTION = "explicit_mm_or_projected_ipp; tie_break_sop_path; else_preserve_input_order"
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,19 @@ class SliceSelectionConfig:
                 or self.physical_position_tolerance_mm < 0):
             raise ValueError("physical_position_tolerance_mm must be finite and nonnegative")
 
+    def to_preprocessing_spec(self) -> dict[str, Any]:
+        """Return the canonical JSON-compatible identity payload for DatasetVersion.preprocessing."""
+        return {"slice_selection": {
+            "strategy": self.strategy,
+            "count": self.count,
+            "short_series_policy": self.short_series_policy,
+            "physical_position_tolerance_mm": self.physical_position_tolerance_mm,
+            "allow_fallback": self.allow_fallback,
+            "fallback_policy": ("uniform" if self.allow_fallback else "error")
+                if self.strategy == "physical_span" else "not_applicable",
+            "ordering_assumption": ORDERING_ASSUMPTION,
+        }}
+
 
 @dataclass(frozen=True)
 class SliceSelectionResult:
@@ -47,7 +63,7 @@ class SliceSelectionResult:
     mean_selected_spacing: float | None
     warnings: tuple[str, ...] = ()
     series_uid: str | None = None
-    ordering_assumption: str = "complete physical positions sort by slice-normal projection; otherwise caller input order is preserved"
+    ordering_assumption: str = ORDERING_ASSUMPTION
     parameters: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,6 +72,7 @@ class SliceSelectionResult:
                 "source_count": self.source_count, "selected_indices": list(self.selected_indices),
                 "selected_positions_mm": list(self.selected_positions_mm),
                 "selected_sop_instance_uids": [_sop_uid(item) for item in self.selected],
+                "selected_references": [_selection_reference(item) for item in self.selected],
                 "fallback": self.fallback, "coverage_fraction": self.coverage_fraction,
                 "physical_span_source": self.physical_span_source,
                 "physical_span_selected": self.physical_span_selected,
@@ -77,12 +94,11 @@ class SliceSelector:
                else getattr(series, "series_instance_uid", None))
         count = len(slices)
         positions = tuple(_physical_position(item) for item in slices)
-        warnings = list(series.get("warnings", ()) if isinstance(series, Mapping)
-                        else getattr(series, "warnings", ()))
+        warnings = _collect_warnings(series, slices)
         if count == 0:
             return SliceSelectionResult((), self.config.count, 0, self.config.strategy,
                 None, 0, (), (), 0.0, None, None, None, None, None, tuple(warnings), uid,
-                parameters=asdict(self.config))
+                parameters=self.config.to_preprocessing_spec()["slice_selection"])
 
         # Position-backed ordering is stable for shuffled inputs; ties retain identity order.
         complete_positions = all(value is not None for value in positions)
@@ -119,7 +135,7 @@ class SliceSelector:
         pad_count = (wanted - len(chosen) if count < wanted
                      and self.config.short_series_policy == "pad_reference" else 0)
 
-        parameters = asdict(self.config)
+        parameters = self.config.to_preprocessing_spec()["slice_selection"]
         if self.config.strategy == "center":
             parameters.update(start_index=chosen[0], end_index=chosen[-1] + 1,
                               center_index=(chosen[0] + chosen[-1]) / 2)
@@ -127,9 +143,9 @@ class SliceSelector:
         selected = tuple(ordered[i] for i in chosen) + (None,) * pad_count
         selected_indices = tuple(order[i] for i in chosen) + (None,) * pad_count
         selected_positions = tuple(ordered_positions[i] for i in chosen) + (None,) * pad_count
-        finite_positions = [p for p in ordered_positions if p is not None]
+        finite_positions = list(ordered_positions) if complete_positions else []
         source_span = max(finite_positions) - min(finite_positions) if len(finite_positions) > 1 else 0.0 if finite_positions else None
-        chosen_finite = [p for p in selected_positions if p is not None]
+        chosen_finite = list(selected_positions) if complete_positions else []
         selected_span = max(chosen_finite) - min(chosen_finite) if len(chosen_finite) > 1 else 0.0 if chosen_finite else None
         if source_span is not None and source_span > 0 and selected_span is not None:
             coverage = min(1.0, selected_span / source_span)
@@ -185,18 +201,40 @@ def _repeat_indices(size: int, count: int) -> list[int]:
 def _physical_indices(positions: Sequence[float | None], count: int,
                       tolerance_mm: float) -> list[int]:
     size = len(positions)
+    groups = _position_groups(positions, tolerance_mm)
+    representatives = [group[0] for group in groups]
+    if representatives[-1] != size - 1:
+        representatives.append(size - 1)
+    low, high = positions[0], positions[-1]
     if count > size:
-        return _uniform_indices(size, count)
+        candidates = representatives
+        result = []
+        cursor = 0
+        for slot in range(count):
+            if slot == count - 1:
+                cursor = len(candidates) - 1
+            else:
+                target = low + (high - low) * slot / (count - 1)
+                while (cursor + 1 < len(candidates)
+                       and abs(positions[candidates[cursor + 1]] - target)
+                       < abs(positions[candidates[cursor]] - target)):
+                    cursor += 1
+            result.append(candidates[cursor])
+        return result
     if count == 1:
         return [min(range(size), key=lambda i: (abs(positions[i] - (positions[0] + positions[-1]) / 2), i))]
-    candidates = list(range(size))
-    representatives: list[int] = []
-    for index, position in enumerate(positions):
-        if not representatives or position - positions[representatives[-1]] > tolerance_mm:
-            representatives.append(index)
-    if len(representatives) >= count:
-        candidates = representatives
-    low, high = positions[0], positions[-1]
+    candidates = representatives
+    if len(candidates) < count:
+        candidates = list(candidates)
+        present = set(candidates)
+        extras = deque((indices, 0) for group in groups
+                       if (indices := [index for index in group if index not in present]))
+        while len(candidates) < count and extras:
+            group_extras, offset = extras.popleft()
+            candidates.append(group_extras[offset])
+            if offset + 1 < len(group_extras):
+                extras.append((group_extras, offset + 1))
+        candidates.sort()
     candidate_slots = []
     for slot in range(count):
         if slot == 0:
@@ -207,10 +245,23 @@ def _physical_indices(positions: Sequence[float | None], count: int,
             target = low + (high - low) * slot / (count - 1)
             lower = candidate_slots[-1] + 1
             upper = len(candidates) - (count - slot)
-            candidate_slot = min(range(lower, upper + 1),
-                                 key=lambda j: (abs(positions[candidates[j]] - target), j))
+            candidate_slot = lower
+            while (candidate_slot < upper
+                   and abs(positions[candidates[candidate_slot + 1]] - target)
+                   < abs(positions[candidates[candidate_slot]] - target)):
+                candidate_slot += 1
         candidate_slots.append(candidate_slot)
     return [candidates[j] for j in candidate_slots]
+
+
+def _position_groups(positions: Sequence[float | None], tolerance_mm: float) -> list[list[int]]:
+    groups: list[list[int]] = []
+    for index, position in enumerate(positions):
+        if not groups or position - positions[groups[-1][0]] > tolerance_mm:
+            groups.append([index])
+        else:
+            groups[-1].append(index)
+    return groups
 
 
 def _physical_position(item: Any) -> float | None:
@@ -230,14 +281,17 @@ def _physical_position(item: Any) -> float | None:
         if not all(math.isfinite(v) for v in xyz):
             return None
         orientation = metadata.get("ImageOrientationPatient")
-        if isinstance(orientation, (list, tuple)) and len(orientation) == 6:
-            row, col = [float(v) for v in orientation[:3]], [float(v) for v in orientation[3:]]
-            normal = (row[1]*col[2]-row[2]*col[1], row[2]*col[0]-row[0]*col[2], row[0]*col[1]-row[1]*col[0])
-            norm = math.sqrt(sum(v*v for v in normal))
-            if norm > 0:
-                return sum(a*b for a, b in zip(xyz, normal)) / norm
-        return xyz[2]
-    except (TypeError, ValueError):
+        if not isinstance(orientation, (list, tuple)) or len(orientation) != 6:
+            return None
+        row, col = [float(v) for v in orientation[:3]], [float(v) for v in orientation[3:]]
+        if not all(math.isfinite(v) for v in (*row, *col)):
+            return None
+        normal = (row[1]*col[2]-row[2]*col[1], row[2]*col[0]-row[0]*col[2], row[0]*col[1]-row[1]*col[0])
+        norm = math.sqrt(sum(v*v for v in normal))
+        if norm == 0 or not math.isfinite(norm):
+            return None
+        return sum(a*b for a, b in zip(xyz, normal)) / norm
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -248,12 +302,36 @@ def _metadata(item: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
-def _stable_key(item: Any) -> str:
+def _collect_warnings(series: Any, slices: Sequence[Any]) -> list[str]:
+    series_warnings = (series.get("warnings", ()) if isinstance(series, Mapping)
+                       else getattr(series, "warnings", ()))
+    warnings = list(series_warnings or ())
+    for item in slices:
+        item_warnings = (item.get("warnings", ()) if isinstance(item, Mapping)
+                         else getattr(item, "warnings", ()))
+        metadata_warnings = _metadata(item).get("metadata_warnings", ())
+        warnings.extend(item_warnings or ())
+        warnings.extend(metadata_warnings or ())
+    return warnings
+
+
+def _stable_key(item: Any) -> tuple[str, str, str, str]:
     metadata = _metadata(item)
     path = item.get("relative_path", "") if isinstance(item, Mapping) else getattr(item, "relative_path", "")
-    return str(metadata.get("SOPInstanceUID") or getattr(item, "slice_id", "") or
-               path or repr(sorted(metadata.items())))
+    return (str(metadata.get("SOPInstanceUID") or ""), str(path or ""),
+            str(getattr(item, "slice_id", "") or ""),
+            repr(sorted(metadata.items(), key=lambda entry: str(entry[0]))))
 
 
 def _sop_uid(item: Any) -> str | None:
     return _metadata(item).get("SOPInstanceUID")
+
+
+def _selection_reference(item: Any) -> dict[str, str | None] | None:
+    if item is None:
+        return None
+    metadata = _metadata(item)
+    path = item.get("relative_path") if isinstance(item, Mapping) else getattr(item, "relative_path", None)
+    slice_id = getattr(item, "slice_id", None)
+    return {"sop_instance_uid": metadata.get("SOPInstanceUID"),
+            "slice_id": slice_id, "relative_path": path}

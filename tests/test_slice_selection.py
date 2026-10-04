@@ -1,7 +1,13 @@
 import unittest
+import json
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+import tempfile
 
 from rsna.contracts import DatasetVersion
-from rsna.data.selection import SliceSelector, select_slices
+from rsna.data.selection import SliceSelectionConfig, SliceSelector, select_slices
+from rsna.cli import main
 
 
 def series(count, positions=None):
@@ -47,6 +53,8 @@ class SliceSelectionTests(unittest.TestCase):
         self.assertEqual(14, padded.selected_indices.count(None))
         self.assertEqual(24, select_slices(series(1), count=24,
                          short_series_policy="repeat_nearest").actual_count)
+        one = select_slices(series(1), count=24, short_series_policy="repeat_nearest")
+        self.assertEqual((0,) * 24, one.selected_indices)
         self.assertEqual(0, select_slices([], count=24).actual_count)
         with self.assertRaises(ValueError):
             select_slices(short, count=24, short_series_policy="strict")
@@ -59,6 +67,10 @@ class SliceSelectionTests(unittest.TestCase):
         partial[2]["metadata"].pop("physical_position_mm")
         partial_result = select_slices(partial, strategy="physical_span", count=2)
         self.assertEqual("uniform", partial_result.fallback)
+        self.assertIsNone(partial_result.physical_span_source)
+        self.assertIsNone(partial_result.physical_span_selected)
+        self.assertIsNone(partial_result.mean_selected_spacing)
+        self.assertEqual(1.0, partial_result.coverage_fraction)
         with self.assertRaises(ValueError):
             select_slices(series(3), strategy="physical_span", count=2, allow_fallback=False)
 
@@ -69,6 +81,8 @@ class SliceSelectionTests(unittest.TestCase):
         self.assertEqual(tuple(i["metadata"]["SOPInstanceUID"] for i in selected.selected),
                          tuple(i["metadata"]["SOPInstanceUID"] for i in again.selected))
         self.assertTrue(any("duplicate physical" in warning for warning in selected.warnings))
+        selected_positions = [p for p in selected.selected_positions_mm if p is not None]
+        self.assertEqual(1, sum(0.999 <= p <= 1.001 for p in selected_positions))
 
     def test_physical_sampling_preserves_order_and_endpoints(self):
         result = select_slices(series(4, [0.0, 1.0, 2.0, 100.0]),
@@ -76,19 +90,114 @@ class SliceSelectionTests(unittest.TestCase):
         self.assertEqual((0, 1, 2, 3), result.selected_indices)
         self.assertEqual((0.0, 1.0, 2.0, 100.0), result.selected_positions_mm)
         self.assertEqual(100.0, result.last_selected_position)
+        repeated = select_slices(series(3, [0.0, 0.0, 10.0]), strategy="physical_span",
+                                 count=4, short_series_policy="repeat_nearest")
+        self.assertEqual(0.0, repeated.first_selected_position)
+        self.assertEqual(10.0, repeated.last_selected_position)
+        self.assertEqual(1.0, repeated.coverage_fraction)
+        duplicate_heavy = select_slices(series(7, [0, 1, 2, 90, 90, 90, 100]),
+                                        strategy="physical_span", count=6)
+        self.assertEqual((0, 1, 2, 90, 90, 100), duplicate_heavy.selected_positions_mm)
+        near_endpoint = select_slices(series(5, [0, 1, 2, 3, 3.0001]),
+                                      strategy="physical_span", count=3)
+        self.assertEqual(3.0001, near_endpoint.last_selected_position)
+
+    def test_image_position_requires_usable_orientation_for_physical_sampling(self):
+        missing_orientation = [{"metadata": {"ImagePositionPatient": [0, 0, i]}}
+                               for i in range(4)]
+        fallback = select_slices(missing_orientation, strategy="physical_span", count=2)
+        self.assertEqual("uniform", fallback.fallback)
+        sagittal = [{"metadata": {"ImagePositionPatient": [0, -i, 0],
+                    "ImageOrientationPatient": [1, 0, 0, 0, 0, 1],
+                    "SOPInstanceUID": str(i)}} for i in range(4)]
+        physical = select_slices(sagittal, strategy="physical_span", count=2)
+        self.assertIsNone(physical.fallback)
+        self.assertEqual(3.0, physical.physical_span_source)
+        self.assertEqual(3.0, physical.physical_span_selected)
 
     def test_count_edges_and_preprocessing_identity(self):
         self.assertEqual((19,), select_slices(series(40), count=1).selected_indices)
         self.assertEqual(40, select_slices(series(40), count=40).actual_count)
+        self.assertEqual(tuple(range(40)), select_slices(series(40, list(range(40))),
+                         strategy="physical_span", count=40).selected_indices)
+        center_position = select_slices(series(4, [0, 1, 50, 100]),
+                                        strategy="physical_span", count=1)
+        self.assertEqual((2,), center_position.selected_indices)
         for count in (16, 24, 32, 64):
             self.assertEqual(count, select_slices(series(80), count=count).actual_count)
         base = dict(name="data", version="v1", source_manifest_sha256="a" * 64,
                     preprocessing_version="p1", class_names=("normal", "abnormal"))
-        identity = lambda strategy, count: DatasetVersion(**base, preprocessing={
-            "slice_selection": {"strategy": strategy, "count": count,
-                "short_series_policy": "keep_all", "allow_fallback": True}}).dataset_version_id
-        self.assertNotEqual(identity("uniform", 24), identity("uniform", 32))
-        self.assertNotEqual(identity("uniform", 24), identity("physical_span", 24))
+        identity = lambda config: DatasetVersion(
+            **base, preprocessing=config.to_preprocessing_spec()).dataset_version_id
+        uniform24 = SliceSelectionConfig(strategy="uniform", count=24)
+        self.assertNotEqual(identity(uniform24), identity(SliceSelectionConfig(strategy="uniform", count=32)))
+        self.assertNotEqual(identity(uniform24), identity(SliceSelectionConfig(strategy="physical_span", count=24)))
+        self.assertNotEqual(identity(uniform24), identity(SliceSelectionConfig(
+            strategy="uniform", count=24, short_series_policy="repeat_nearest")))
+        self.assertNotEqual(identity(SliceSelectionConfig(strategy="physical_span", count=24)),
+                            identity(SliceSelectionConfig(strategy="physical_span", count=24,
+                                                          allow_fallback=False)))
+        self.assertNotEqual(identity(SliceSelectionConfig(strategy="physical_span", count=24)),
+                            identity(SliceSelectionConfig(strategy="physical_span", count=24,
+                                                          physical_position_tolerance_mm=0.01)))
+
+    def test_series_and_slice_warnings_survive_selection_serialization(self):
+        source = {"series_instance_uid": "series-1", "warnings": ["series geometry warning"],
+                  "slices": [{"metadata": {"SOPInstanceUID": "sop-1",
+                              "metadata_warnings": ["slice geometry warning"]},
+                              "warnings": ["slice record warning"]}]}
+        result = SliceSelector({"strategy": "uniform", "count": 1}).select(source)
+        self.assertEqual(("series geometry warning", "slice record warning",
+                          "slice geometry warning"), result.warnings)
+        self.assertEqual(list(result.warnings), result.to_dict()["warnings"])
+        self.assertEqual("series-1", result.to_dict()["series_uid"])
+        self.assertEqual("sop-1", result.to_dict()["selected_references"][0]["sop_instance_uid"])
+        json.dumps(result.to_dict())
+
+    def test_config_identity_covers_every_selection_setting(self):
+        base = SliceSelectionConfig(strategy="physical_span", count=24)
+        spec = base.to_preprocessing_spec()["slice_selection"]
+        self.assertEqual("uniform", spec["fallback_policy"])
+        self.assertIn("ordering_assumption", spec)
+        equivalent = SliceSelectionConfig(strategy="physical_span", count=24,
+            short_series_policy="keep_all", physical_position_tolerance_mm=1e-3,
+            allow_fallback=True)
+        self.assertEqual(base.to_preprocessing_spec(), equivalent.to_preprocessing_spec())
+        self.assertEqual("explicit_mm_or_projected_ipp; tie_break_sop_path; else_preserve_input_order",
+                         spec["ordering_assumption"])
+
+    def test_selector_never_reads_pixel_data_and_handles_multiple_series(self):
+        class PixelGuard:
+            metadata = {"SOPInstanceUID": "sop-no-pixels"}
+            relative_path = "slice.dcm"
+
+            @property
+            def pixel_array(self):
+                raise AssertionError("pixel data must not be accessed")
+
+        selector = SliceSelector(SliceSelectionConfig(strategy="uniform", count=1))
+        results = [selector.select({"series_instance_uid": uid, "slices": [PixelGuard()]})
+                   for uid in ("series-a", "series-b")]
+        self.assertEqual(["series-a", "series-b"], [result.to_dict()["series_uid"] for result in results])
+        for result in results:
+            json.dumps(result.to_dict())
+
+    def test_cli_inspects_multiple_series_manifest_without_pixels(self):
+        manifest = {"studies": [{"series": [
+            {"series_instance_uid": uid, "slices": series(40, list(range(40)))}
+            for uid in ("series-a", "series-b")] }]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            output = StringIO()
+            with redirect_stdout(output):
+                code = main(["select-slices", "--manifest", str(path),
+                             "--strategy", "physical_span", "--count", "24"])
+        result = json.loads(output.getvalue())
+        self.assertEqual(0, code)
+        self.assertEqual(2, result["series_count"])
+        self.assertEqual({"series-a", "series-b"},
+                         {entry["series_uid"] for entry in result["selections"]})
 
 
 if __name__ == "__main__":

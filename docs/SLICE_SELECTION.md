@@ -1,6 +1,6 @@
 # MRI slice selection
 
-The selector consumes slice records or metadata mappings for one series. It does not read pixel data. Call it after geometry ordering when that stage is available; otherwise input order is treated as the caller's preordered reference order. When complete physical positions are present, the selector sorts by position (DICOM `ImagePositionPatient` projected onto the slice normal when `ImageOrientationPatient` is present) with a stable SOP/path tie-breaker.
+The selector consumes slice records or metadata mappings for one series. It does not read pixel data. Call it after geometry ordering when that stage is available; otherwise input order is used when physical ordering cannot be established. Complete physical positions are sorted by a scalar millimeter position or by projecting DICOM `ImagePositionPatient` onto the slice normal computed from `ImageOrientationPatient`; ties use SOP UID and path. Missing or invalid orientation does not use the z component as a proxy: `physical_span` falls back unless an upstream scalar position is supplied.
 
 ```text
 ordered series
@@ -30,18 +30,16 @@ manifest_entry = result.to_dict()
 | `center` | Ordered slice index | Central anatomy baseline |
 | `physical_span` | Millimeters | Reduce sensitivity to irregular spacing |
 
-`physical_span` falls back explicitly to `uniform` if any slice lacks usable position metadata. Set `allow_fallback=false` to fail instead. Partial geometry is never described as physical sampling. Input order is retained for index-based strategies; callers should run geometry ordering first if their records are not ordered.
+`physical_span` falls back explicitly to `uniform` if any slice lacks usable position metadata. Set `allow_fallback=false` to fail instead. Partial geometry is never described as physical sampling: physical span and spacing metrics are omitted, while the result retains any known per-slice positions and computes coverage in index space. When complete positions exist, the selector orders slices by physical position before applying every strategy; otherwise index-based strategies preserve caller order, so callers should run geometry ordering first.
 
-For a short series, `keep_all` returns all available references. `repeat_nearest` returns exactly the requested number by deterministic endpoint-inclusive resampling, reusing references without copying files. `pad_reference` returns the available references followed by explicit `null`/`None` placeholders for downstream padding. `strict` raises an error. Zero slices produce an empty result. One-slice series and count one are supported.
+For a short series, `keep_all` returns all available references. `repeat_nearest` returns exactly the requested number by deterministic endpoint-inclusive resampling, reusing references without copying files. For `physical_span`, targets remain uniform in millimeters and map to nearest available physical positions; for index-based strategies, targets are uniform across the ordered index range. `pad_reference` returns the available references followed by explicit `null`/`None` placeholders for downstream padding. `strict` raises an error. Zero slices produce an empty result. One-slice series and count one are supported.
 
-Selection parameters are part of preprocessing identity when stored in `DatasetVersion.preprocessing`; that mapping is included in `dataset_version_id`'s canonical hash. For example:
+Selection parameters, fallback policy, and ordering assumption are part of preprocessing identity through `SliceSelectionConfig.to_preprocessing_spec()`. Pass that JSON-compatible mapping as `DatasetVersion.preprocessing`; the existing canonical hash includes it. The realized fallback and selected references remain in each result manifest. For example:
 
 ```python
-DatasetVersion(..., preprocessing={"slice_selection": {
-    "strategy": "physical_span", "count": 24,
-    "short_series_policy": "repeat_nearest",
-    "physical_position_tolerance_mm": 0.001, "allow_fallback": True,
-}})
+DatasetVersion(..., preprocessing=SliceSelectionConfig(
+    strategy="physical_span", count=24, short_series_policy="repeat_nearest",
+).to_preprocessing_spec())
 ```
 
 The `configs/slice-selection/` examples show 16, 24 and 32-slice settings. To inspect a saved dataset index without pixels:
