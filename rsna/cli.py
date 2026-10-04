@@ -9,6 +9,7 @@ import sys
 import tomllib
 
 from .contracts import DatasetVersion, ExperimentSpec, FoldPlan, ModelCandidate
+from .data import discover_dataset, save_manifest
 from .experiments.plan import plan_jobs
 from .experiments.runner import run_jobs
 from .providers.mock import MockProvider
@@ -36,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "leakage-check":
         return _leakage_check(argv[1:])
+    if argv and argv[0] == "data-index":
+        return _data_index(argv[1:])
     parser = argparse.ArgumentParser(prog="kaggle-rsna")
     parser.add_argument("config", help="TOML smoke configuration")
     args = parser.parse_args(argv)
@@ -53,7 +56,8 @@ def _leakage_check(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     dataset = json.loads(Path(args.dataset_manifest).read_text(encoding="utf-8"))
     plan = json.loads(Path(args.fold_plan).read_text(encoding="utf-8")) if args.fold_plan else None
-    report = validate_leakage(dataset, plan, policy=args.policy)
+    report = validate_leakage(dataset, plan, policy=args.policy,
+                              dataset_version=dataset.get("dataset_version"))
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -63,9 +67,31 @@ def _leakage_check(argv: list[str]) -> int:
               ("Series leakage", "SERIES_CROSS_FOLD"), ("Slice leakage", "SLICE_CROSS_FOLD"),
               ("Duplicate hashes across folds", "DUPLICATE_FILE_HASH"))
     for label, key in labels:
-        print(f"{label}: {report.counts['issues_by_type'].get(key, 0)}")
+        if key == "DUPLICATE_FILE_HASH":
+            count = sum(issue.type.value == key and len(issue.folds_involved) > 1 for issue in report.issues)
+        else:
+            count = report.counts["issues_by_type"].get(key, 0)
+        print(f"{label}: {count}")
     if report.passed:
         print("RESULT: PASS")
         return 0
     print(f"RESULT: FAIL\nCritical issues: {report.n_errors}")
     return 1 if args.policy == LeakagePolicy.STRICT.value else 0
+
+
+def _data_index(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="kaggle-rsna data-index")
+    parser.add_argument("--input", required=True, help="Dataset root directory")
+    parser.add_argument("--output", required=True, help="Output directory for manifest.json")
+    parser.add_argument("--on-invalid", choices=("strict", "warn", "skip-invalid"), default="warn")
+    args = parser.parse_args(argv)
+    index = discover_dataset(args.input, on_invalid=args.on_invalid)
+    manifest_path = Path(args.output) / "manifest.json"
+    manifest_hash = save_manifest(index, manifest_path)
+    stats = index.statistics
+    print(f"Studies: {stats['n_studies']}, Series: {stats['n_series']}, Slices: {stats['n_slices']}")
+    print(f"Invalid DICOMs: {stats['invalid_files']}, Duplicate SOPInstanceUIDs: {stats['duplicate_sop_uid_count']}")
+    print(f"Manifest: {manifest_path}")
+    print(f"Manifest SHA-256: {manifest_hash}")
+    print(f"Dataset index ID: {index.index_id}")
+    return 0

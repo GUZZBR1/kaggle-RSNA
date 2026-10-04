@@ -99,6 +99,8 @@ class LeakageReport:
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     schema_version: int = REPORT_SCHEMA_VERSION
     report_id: str = ""
+    input_material_sha256: str = ""
+    provenance: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.schema_version != REPORT_SCHEMA_VERSION:
@@ -108,7 +110,12 @@ class LeakageReport:
         object.__setattr__(self, "issues", issues)
         object.__setattr__(self, "counts", freeze_json(self.counts))
         object.__setattr__(self, "checked_entities", freeze_json(self.checked_entities))
+        object.__setattr__(self, "provenance", freeze_json(self.provenance))
         object.__setattr__(self, "policy", LeakagePolicy(self.policy))
+        material_sha = self.input_material_sha256 or digest({"records": [], "assignments": {}, "overrides": {}})
+        if len(material_sha) != 64 or any(char not in "0123456789abcdef" for char in material_sha):
+            raise ValueError("input_material_sha256 must be a lowercase SHA-256 digest")
+        object.__setattr__(self, "input_material_sha256", material_sha)
         has_errors = any(issue.severity == "error" for issue in issues)
         if self.passed != (not has_errors):
             raise ValueError("passed must be false exactly when the report contains errors")
@@ -116,7 +123,8 @@ class LeakageReport:
                            "issues": [_material_issue(i) for i in issues], "counts": self.counts,
                            "checked_entities": self.checked_entities,
                            "fold_plan_id": self.fold_plan_id, "dataset_version_id": self.dataset_version_id,
-                           "policy": self.policy.value, "validator_version": self.validator_version})
+                           "policy": self.policy.value, "validator_version": self.validator_version,
+                           "input_material_sha256": material_sha})
         if self.report_id and self.report_id != expected:
             raise ValueError("report_id does not match report contents")
         object.__setattr__(self, "report_id", expected)
@@ -135,7 +143,8 @@ class LeakageReport:
                 "fold_plan_id": self.fold_plan_id, "dataset_version_id": self.dataset_version_id,
                 "policy": self.policy.value, "validator_version": self.validator_version,
                 "timestamp": self.timestamp, "schema_version": self.schema_version,
-                "report_id": self.report_id}
+                "report_id": self.report_id, "input_material_sha256": self.input_material_sha256,
+                "provenance": jsonable(self.provenance)}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "LeakageReport":
@@ -145,7 +154,8 @@ class LeakageReport:
                    value["counts"], value["checked_entities"], value.get("fold_plan_id"),
                    value.get("dataset_version_id"), LeakagePolicy(value["policy"]),
                    value["validator_version"], value["timestamp"], value["schema_version"],
-                   value.get("report_id", ""))
+                   value.get("report_id", ""), value.get("input_material_sha256", ""),
+                   value.get("provenance", {}))
 
 
 def _material_issue(issue: LeakageIssue) -> dict[str, Any]:

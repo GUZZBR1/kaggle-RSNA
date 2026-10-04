@@ -22,7 +22,7 @@ validated_report_id = require_valid_leakage_report(report)
 # A TrainingJob may record validated_leakage_report_id for provenance.
 ```
 
-`validate_leakage(dataset_index, fold_plan)` accepts the existing `FoldPlan` contract and a sequence of mapping records. The records are the minimal adapter when a richer `DatasetIndex` is not available. Recognized identifiers include `patient_id`/`PatientID`, `study_uid`/`StudyInstanceUID`, `series_uid`/`SeriesInstanceUID`, `sop_uid`/`SOPInstanceUID`, `file_hash`/`sha256`, and `fold_id`/`split`/`partition`. DICOM metadata may live in a nested `metadata` mapping. File paths are evidence only; they are never identity keys.
+`validate_leakage(dataset_index, fold_plan)` accepts the existing `FoldPlan` contract and directly adapts the repository's `DatasetIndex`, `StudyRecord`, `SeriesRecord`, and `SliceRecord` objects (or their saved manifest JSON). It also accepts a sequence of mapping records as a lightweight adapter when an index is unavailable. Recognized identifiers include `patient_id`/`PatientID`, `study_uid`/`StudyInstanceUID`, `series_uid`/`SeriesInstanceUID`, `sop_uid`/`SOPInstanceUID`, `file_hash`/`sha256`, and `fold_id`/`split`/`partition`. DICOM metadata may live in a nested `metadata` mapping. File paths are evidence only; they are never identity keys.
 
 The existing `FoldPlan` stores its dataset binding and fold IDs, but does not contain per-study assignments. Supply assignments separately as an identity-to-fold mapping, or put the resolved `fold_id` on each record. JSON CLI input may use `{ "fold_plan": { ... }, "assignments": { "study-uid": "fold_0" } }`.
 
@@ -51,7 +51,7 @@ Critical by default: patient, study, series, and slice cross-fold identity; dupl
 | `UNBOUND_SERIES` / `UNBOUND_SLICE` | Explicit series/slice entity lacks its required parent relation. |
 | `LABEL_PROVENANCE_LEAKAGE` | A label's declared source split differs from the consuming record's split. |
 
-Every report includes schema version, validator version, dataset and fold-plan IDs, policy, issue details, entity statistics, timestamp metadata, and deterministic `report_id`. The ID hashes normalized issue/config/material data and excludes timestamp, host and paths.
+Every report includes schema version, validator version, dataset and fold-plan IDs, policy, issue details, entity statistics, timestamp metadata, an `input_material_sha256` fingerprint, and provenance counts/IDs when available (DatasetIndex ID, assignment manifest hash, lineage and label-provenance counts). The fingerprint covers normalized entity IDs, assignments, source lineage, labels and severity configuration. `report_id` includes that fingerprint, so distinct clean datasets do not collapse to the same identity. Material identity excludes timestamp, host and paths.
 
 ## CLI
 
@@ -62,7 +62,7 @@ python -m rsna leakage-check \
   --output artifacts/leakage-report.json
 ```
 
-The dataset manifest is JSON with `records` (or `entities`) and optional `dataset_version_id`. Fold assignments may be included on each record or in the FoldPlan wrapper described above. `--policy audit` writes the report and returns zero even when it contains errors; the report's `passed` remains false. `--policy strict` returns nonzero when any error is present.
+The dataset manifest may be a saved `DatasetIndex` manifest, a wrapper with `records` (or `entities`), or a wrapper containing `dataset_index`; include `dataset_version_id` or a `dataset_version` object when available. Fold assignments may be included on each record or in the FoldPlan wrapper described above. `--policy audit` writes the report and returns zero even when it contains errors; the report's `passed` remains false. `--policy strict` returns nonzero when any error is present.
 
 ## Records and derived data
 

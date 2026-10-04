@@ -106,7 +106,9 @@ def resolve_study_laterality(series_list: Sequence[Mapping[str, Any] | Sequence[
     known = {result.resolved for result in results if result.resolved in {"LEFT", "RIGHT", "BILATERAL"}}
     evidence = tuple(entry for result in results for entry in result.evidence)
     warnings = tuple(warning for result in results for warning in result.warnings)
-    if any(result.resolved == "AMBIGUOUS" for result in results) or len(known) > 1:
+    unresolved_conflict = any("conflict" in warning.lower() or "contradictory" in warning.lower()
+                              for result in results for warning in result.warnings)
+    if unresolved_conflict or any(result.resolved == "AMBIGUOUS" for result in results) or len(known) > 1:
         return LateralityResolution("AMBIGUOUS", "unknown", evidence, warnings + ("study contains conflicting series laterality",))
     if not known:
         return LateralityResolution("UNKNOWN", "unknown", evidence, warnings)

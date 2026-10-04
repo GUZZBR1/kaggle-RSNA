@@ -23,22 +23,29 @@ class DatasetVersion:
     uri: str = ""
     schema_version: int = SCHEMA_VERSION
     dataset_version_id: str = ""
+    dataset_index_artifact_id: str | None = None
 
     def __post_init__(self) -> None:
         _required_text(self.name, "dataset name")
         _required_text(self.version, "dataset version")
         _required_text(self.preprocessing_version, "preprocessing version")
         _sha256(self.source_manifest_sha256, "source_manifest_sha256")
+        if self.dataset_index_artifact_id is not None:
+            _sha256(self.dataset_index_artifact_id, "dataset_index_artifact_id")
         _unique_names(self.class_names, "class_names")
         _schema(self.schema_version)
         object.__setattr__(self, "class_names", tuple(self.class_names))
         object.__setattr__(self, "preprocessing", freeze_json(self.preprocessing))
-        expected = digest({"schema_version": self.schema_version, "name": self.name,
+        identity_data = {"schema_version": self.schema_version, "name": self.name,
                            "version": self.version,
                            "source_manifest_sha256": self.source_manifest_sha256,
+                           "dataset_index_artifact_id": self.dataset_index_artifact_id,
                            "preprocessing_version": self.preprocessing_version,
                            "preprocessing": self.preprocessing,
-                           "class_names": self.class_names})
+                           "class_names": self.class_names}
+        if self.dataset_index_artifact_id is None:
+            identity_data.pop("dataset_index_artifact_id")
+        expected = digest(identity_data)
         _match_id(self.dataset_version_id, expected, "dataset_version_id")
         object.__setattr__(self, "dataset_version_id", expected)
 
@@ -46,6 +53,7 @@ class DatasetVersion:
         return {"name": self.name, "version": self.version,
                 "source_manifest_sha256": self.source_manifest_sha256,
                 "preprocessing_version": self.preprocessing_version,
+                "dataset_index_artifact_id": self.dataset_index_artifact_id,
                 "class_names": list(self.class_names),
                 "preprocessing": jsonable(self.preprocessing), "uri": self.uri,
                 "schema_version": self.schema_version,
@@ -190,9 +198,9 @@ class TrainingJob:
     random_state: int
     resources: Mapping[str, Any]
     configuration: Mapping[str, Any] = field(default_factory=dict)
-    validated_leakage_report_id: str | None = None
     schema_version: int = SCHEMA_VERSION
     training_job_id: str = ""
+    validated_leakage_report_id: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("experiment_id", "dataset_version_id", "fold_plan_id", "model_candidate_id"):
