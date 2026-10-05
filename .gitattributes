@@ -1,0 +1,2 @@
+examples/prepared-dataset.synthetic-artifacts/*.json -text
+examples/prepared-dataset.synthetic.json text eol=lf

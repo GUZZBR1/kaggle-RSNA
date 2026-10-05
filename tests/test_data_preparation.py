@@ -5,6 +5,7 @@ import csv
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,7 @@ from pydicom.uid import ExplicitVRLittleEndian, MRImageStorage
 from rsna.cli import main
 from rsna.targets import Target, TargetRegistry, TARGET_REGISTRY
 from rsna.preparation import (
-    PreparationConfig, PreparationError, STAGES, load_prepared_dataset, prepare_dataset,
+    PreparationConfig, PreparationError, STAGES, StageRecord, load_prepared_dataset, prepare_dataset,
 )
 
 
@@ -59,6 +60,47 @@ def synthetic_manifest():
                 "series": series,
             })
     return {"schema_version": 1, "synthetic": True, "studies": studies}
+
+
+def prepared_example_config(root: Path) -> PreparationConfig:
+    source = root / "source"
+    source.mkdir(parents=True)
+    names = TARGET_REGISTRY.names
+    studies = []
+    for patient in range(2):
+        study_id = f"synthetic_study_{patient + 1:02d}"
+        series_id = f"synthetic_series_{patient + 1:02d}"
+        slices = []
+        for position in range(2):
+            metadata = {
+                "StudyInstanceUID": study_id,
+                "SeriesInstanceUID": series_id,
+                "SOPInstanceUID": f"synthetic_slice_{patient + 1:02d}_{position + 1:02d}",
+                "PatientID": f"synthetic_patient_{patient + 1:02d}",
+                "InstanceNumber": position + 1,
+            }
+            if patient == 0:
+                metadata.update({
+                    "ImageOrientationPatient": [1, 0, 0, 0, 1, 0],
+                    "ImagePositionPatient": [0, 0, position * 2.5],
+                    "Laterality": "L",
+                })
+            slices.append({
+                "slice_id": metadata["SOPInstanceUID"],
+                "path": f"{study_id}/{series_id}/{position + 1:02d}.dcm",
+                "metadata": metadata,
+            })
+        studies.append({
+            "study_id": study_id,
+            "patient_id": f"synthetic_patient_{patient + 1:02d}",
+            "targets": {name: (patient + index) % 2 for index, name in enumerate(names)},
+            "series": [{"series_id": series_id, "slices": slices}],
+        })
+    (source / "source_manifest.json").write_text(json.dumps({
+        "schema_version": 1, "synthetic": True, "studies": studies,
+    }), encoding="utf-8")
+    return PreparationConfig(source, root / "output", mode="synthetic",
+        target_names=names, n_folds=2, slice_count=2)
 
 
 class DataPreparationIntegrationTests(unittest.TestCase):
@@ -328,9 +370,15 @@ class DataPreparationIntegrationTests(unittest.TestCase):
         for item in self.manifest["studies"][0]["series"][0]["slices"]:
             item["metadata"].pop("ImagePositionPatient")
             item["metadata"].pop("ImageOrientationPatient")
+            item["metadata"].pop("Laterality")
         self.write_manifest()
         prepared = prepare_dataset(self.config)
         stages = {stage.stage: stage for stage in prepared.stages}
+        self.assertEqual("UNAVAILABLE", stages["GEOMETRY"].status)
+        self.assertEqual("UNAVAILABLE", stages["ORIENTATION"].status)
+        self.assertEqual("UNAVAILABLE", stages["SELECT"].status)
+        for name in ("GEOMETRY", "ORIENTATION", "SELECT"):
+            self.assertTrue(stages[name].reason)
         self.assertTrue(any("InstanceNumber" in value for value in stages["GEOMETRY"].warnings))
         self.assertTrue(any("physical_span" in value and "fallback" in value
                             for value in stages["SELECT"].warnings))
@@ -339,6 +387,44 @@ class DataPreparationIntegrationTests(unittest.TestCase):
                  for series in study.series for item in series.slices}
         self.assertTrue(paths[selected[0]].endswith("/00.dcm"))
         self.assertTrue(paths[selected[-1]].endswith("/35.dcm"))
+        restored = load_prepared_dataset(prepared.preparation_manifest_uri)
+        self.assertEqual({name: stage.status for name, stage in stages.items()},
+                         {stage.stage: stage.status for stage in restored.stages})
+
+    def test_unavailable_stage_states_are_stable_and_required_stages_cannot_be_unavailable(self):
+        for item in self.manifest["studies"][0]["series"][0]["slices"]:
+            item["metadata"].pop("ImagePositionPatient")
+        self.write_manifest()
+        first = prepare_dataset(self.config)
+        second = prepare_dataset(self.config)
+        self.assertEqual(self.material_ids(first), self.material_ids(second))
+        self.assertEqual(
+            [(stage.stage, stage.status, stage.reason) for stage in first.stages],
+            [(stage.stage, stage.status, stage.reason) for stage in second.stages],
+        )
+        with self.assertRaisesRegex(ValueError, "required stage LABELS"):
+            replace(first, stages=tuple(
+                StageRecord(stage.stage, stage.input_id, stage.output_id,
+                    "UNAVAILABLE", stage.duration_seconds, stage.reused,
+                    stage.records_processed, stage.warnings, "required input absent")
+                if stage.stage == "LABELS" else stage
+                for stage in first.stages))
+        with self.assertRaisesRegex(ValueError, "stage GEOMETRY failed"):
+            replace(first, stages=tuple(
+                StageRecord(stage.stage, stage.input_id, stage.output_id,
+                    "FAILED", stage.duration_seconds, stage.reused,
+                    stage.records_processed, stage.warnings)
+                if stage.stage == "GEOMETRY" else stage
+                for stage in first.stages))
+        with self.assertRaisesRegex(ValueError, "unsupported preparation stage status"):
+            StageRecord("GEOMETRY", "a" * 64, None, "UNKNOWN", 0.0)
+
+    def test_required_label_failure_stays_failed_and_does_not_create_prepared_output(self):
+        self.manifest["studies"][0]["targets"] = {}
+        self.write_manifest()
+        failure = self.assert_failed(self.config, "LABELS")
+        self.assertEqual("FAILED", failure.stages[-1].status)
+        self.assertFalse(list(self.output.glob("prepared/*.json")))
 
     def test_physical_span_without_positions_records_fallback(self):
         for item in self.manifest["studies"][0]["series"][0]["slices"]:
@@ -534,6 +620,74 @@ class DataPreparationIntegrationTests(unittest.TestCase):
             cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
             check=True, timeout=30)
         self.assertEqual(list(self.material_ids(prepared)), json.loads(completed.stdout))
+
+    def test_versioned_synthetic_prepared_dataset_example_is_portable_and_current(self):
+        repository = Path(__file__).resolve().parents[1]
+        sample_path = repository / "examples" / "prepared-dataset.synthetic.json"
+        schema_path = repository / "schemas" / "prepared-dataset.schema.json"
+        payload = json.loads(sample_path.read_text(encoding="utf-8"))
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        stage_schema = schema["properties"]["stages"]["items"]
+        allowed_statuses = stage_schema["properties"]["status"]["enum"]
+        self.assertEqual({"PASS", "FAILED", "SKIPPED", "UNAVAILABLE"}, set(allowed_statuses))
+        self.assertEqual(1, payload["schema_version"])
+        self.assertTrue(payload["synthetic"])
+        self.assertEqual("SYNTHETIC", payload["status"])
+        for stage in payload["stages"]:
+            self.assertIn(stage["status"], allowed_statuses)
+            if stage["status"] in {"SKIPPED", "UNAVAILABLE"}:
+                self.assertTrue(stage["reason"])
+        strings = []
+
+        def collect_strings(value):
+            if isinstance(value, str):
+                strings.append(value)
+            elif isinstance(value, dict):
+                for nested in value.values():
+                    collect_strings(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect_strings(nested)
+
+        collect_strings(payload)
+        for value in strings:
+            self.assertIsNone(re.match(r"^(?:[A-Za-z]:[\\/]|/(?:home|tmp|Users)/)", value), value)
+        self.assertTrue(all(not Path(reference["uri"]).is_absolute()
+                            for reference in payload["artifacts"].values()))
+
+        restored = load_prepared_dataset(sample_path)
+        with tempfile.TemporaryDirectory() as tmp:
+            generated = prepare_dataset(prepared_example_config(Path(tmp)))
+        self.assertEqual(self.material_ids(generated), self.material_ids(restored))
+        self.assertEqual(
+            [(stage.stage, stage.status, stage.reason) for stage in generated.stages],
+            [(stage.stage, stage.status, stage.reason) for stage in restored.stages],
+        )
+        try:
+            from jsonschema import Draft202012Validator, ValidationError
+            from referencing import Registry, Resource
+        except ImportError:
+            self.skipTest("JSON Schema validation runs in CI with the locked jsonschema tool")
+        resources = []
+        for path in (repository / "schemas").glob("*.schema.json"):
+            resource_schema = json.loads(path.read_text(encoding="utf-8"))
+            resource = Resource.from_contents(resource_schema)
+            resources.append((path.name, resource))
+            if resource_schema.get("$id"):
+                resources.append((resource_schema["$id"], resource))
+        registry = Registry().with_resources(resources)
+        validator = Draft202012Validator(schema, registry=registry)
+        validator.validate(payload)
+        invalid_status = json.loads(json.dumps(payload))
+        invalid_status["stages"][0]["status"] = "UNKNOWN"
+        with self.assertRaises(ValidationError):
+            validator.validate(invalid_status)
+        missing_reason = json.loads(json.dumps(payload))
+        unavailable = next(stage for stage in missing_reason["stages"]
+                           if stage["status"] == "UNAVAILABLE")
+        unavailable["reason"] = None
+        with self.assertRaises(ValidationError):
+            validator.validate(missing_reason)
 
 
 if __name__ == "__main__":

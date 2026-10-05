@@ -370,6 +370,8 @@ def _prepare_data(argv: list[str]) -> int:
     for stage in prepared.stages:
         suffix = " (reused)" if stage.reused else ""
         print(f"{stage.stage.title()}: {stage.status}{suffix}")
+        if stage.reason:
+            print(f"  Reason: {stage.reason}")
         for warning in stage.warnings:
             print(f"  Warning: {warning}")
     print(f"DatasetVersion: {prepared.dataset_version.dataset_version_id}")

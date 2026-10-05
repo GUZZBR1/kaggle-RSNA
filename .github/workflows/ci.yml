@@ -44,7 +44,7 @@ jobs:
           fi
 
       - name: Run full test suite
-        run: uv run --locked python -m unittest discover -s tests -q
+        run: uv run --locked --with jsonschema==4.26.0 python -m unittest discover -s tests -q
 
       - name: Compile project and tests
         run: uv run --locked python -m compileall -q rsna tests

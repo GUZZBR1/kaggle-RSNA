@@ -53,12 +53,18 @@
           "stage": { "type": "string" },
           "input_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
           "output_id": { "type": ["string", "null"] },
-          "status": { "enum": ["PASS", "FAILED"] },
+          "status": { "enum": ["PASS", "FAILED", "SKIPPED", "UNAVAILABLE"] },
           "duration_seconds": { "type": "number", "minimum": 0 },
           "reused": { "type": "boolean" },
           "records_processed": { "type": "integer", "minimum": 0 },
-          "warnings": { "type": "array", "items": { "type": "string" } }
-        }
+          "warnings": { "type": "array", "items": { "type": "string" } },
+          "reason": { "type": ["string", "null"] }
+        },
+        "allOf": [
+          { "if": { "properties": { "status": { "enum": ["SKIPPED", "UNAVAILABLE"] } }, "required": ["status"] },
+            "then": { "required": ["reason"], "properties": { "reason": { "type": "string", "minLength": 1 } } } }
+        ],
+        "additionalProperties": false
       }
     },
     "preparation_manifest_uri": { "type": "string", "minLength": 1 },
