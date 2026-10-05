@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath
 import tempfile
 import time
 import tomllib
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .artifacts.store import JsonArtifactStore
 from .contracts import DatasetVersion, FoldPlan
@@ -30,6 +30,9 @@ from .leakage.validator import LeakageValidationError, require_valid_leakage_rep
 
 STAGES = ("DISCOVER", "INDEX", "GEOMETRY", "ORIENTATION", "SELECT", "LABELS",
           "FOLDS", "LEAKAGE", "FINALIZE")
+STAGE_STATUSES = frozenset({"PASS", "FAILED", "SKIPPED", "UNAVAILABLE"})
+REQUIRED_STAGES = frozenset({"DISCOVER", "INDEX", "LABELS", "FOLDS", "LEAKAGE", "FINALIZE"})
+OPTIONAL_STAGES = frozenset(set(STAGES) - REQUIRED_STAGES)
 
 
 @dataclass(frozen=True)
@@ -123,6 +126,13 @@ class StageRecord:
     reused: bool = False
     records_processed: int = 0
     warnings: tuple[str, ...] = ()
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in STAGE_STATUSES:
+            raise ValueError(f"unsupported preparation stage status: {self.status}")
+        if self.status in {"SKIPPED", "UNAVAILABLE"} and not (self.reason and self.reason.strip()):
+            raise ValueError(f"{self.status} preparation stages require a reason")
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "warnings": list(self.warnings)}
@@ -185,6 +195,16 @@ class PreparedDataset:
             raise ValueError("FoldPlan assignment manifest does not match DatasetVersion")
         if self.schema_version != 1:
             raise ValueError("unsupported PreparedDataset schema version")
+        stage_names = tuple(stage.stage for stage in self.stages)
+        if stage_names != STAGES:
+            raise ValueError("PreparedDataset must record every preparation stage in order")
+        for stage in self.stages:
+            if stage.status == "FAILED":
+                raise ValueError(f"stage {stage.stage} failed before finalization")
+            if stage.status in {"SKIPPED", "UNAVAILABLE"} and stage.stage not in OPTIONAL_STAGES:
+                raise ValueError(f"required stage {stage.stage} cannot be {stage.status}")
+            if stage.stage in REQUIRED_STAGES and stage.status != "PASS":
+                raise ValueError(f"required stage {stage.stage} must pass before finalization")
         required_artifacts = {"dataset_index", "source_content", "target_registry", "fold_plan", "fold_assignments", "leakage_report",
                               "orientation_provenance", "selected_slices", "labels"}
         if not required_artifacts <= set(self.artifacts):
@@ -253,7 +273,8 @@ class _Stages:
     def __init__(self) -> None:
         self.records: list[StageRecord] = []
 
-    def run(self, name: str, input_id: str, action):
+    def run(self, name: str, input_id: str, action, *,
+            unavailable_reason: Callable[[Any], str | None] | None = None):
         started = time.perf_counter()
         try:
             value, output_id, warnings, reused, count = action()
@@ -262,8 +283,10 @@ class _Stages:
                 time.perf_counter() - started, warnings=(str(exc),)))
             status = "INVALID" if isinstance(exc, (ValueError, FileNotFoundError, LeakageValidationError)) else "FAILED"
             raise PreparationError(name, status, str(exc), self.records) from exc
-        self.records.append(StageRecord(name, input_id, output_id, "PASS",
-            time.perf_counter() - started, reused, count, tuple(warnings)))
+        reason = unavailable_reason(value) if unavailable_reason is not None else None
+        status = "UNAVAILABLE" if reason else "PASS"
+        self.records.append(StageRecord(name, input_id, output_id, status,
+            time.perf_counter() - started, reused, count, tuple(warnings), reason))
         return value
 
 
@@ -290,16 +313,19 @@ def prepare_dataset(config: PreparationConfig) -> PreparedDataset:
             last.duration_seconds, warnings=("dataset contains no indexed studies",))
         raise PreparationError("INDEX", "INVALID", "dataset contains no indexed studies", stages.records)
     ordered = stages.run("GEOMETRY", index.index_id,
-        lambda: _geometry(index, strict=config.strict_geometry))
+        lambda: _geometry(index, strict=config.strict_geometry),
+        unavailable_reason=_geometry_unavailable_reason)
     orientation_config = OrientationConfig(normalization_mode=config.orientation_mode,
         plane_tolerance_deg=config.orientation_plane_tolerance_deg,
         orientation_consistency_tolerance_deg=config.orientation_consistency_tolerance_deg)
     provenance = stages.run("ORIENTATION", digest(_geometry_material(ordered)),
-        lambda: _orientation(ordered, orientation_config))
+        lambda: _orientation(ordered, orientation_config),
+        unavailable_reason=_orientation_unavailable_reason)
     selection_input = digest({"geometry": _geometry_material(ordered),
         "strategy": config.slice_strategy, "count": config.slice_count})
     selected = stages.run("SELECT", selection_input,
-        lambda: _select(ordered, SliceSelectionConfig(strategy=config.slice_strategy, count=config.slice_count)))
+        lambda: _select(ordered, SliceSelectionConfig(strategy=config.slice_strategy, count=config.slice_count)),
+        unavailable_reason=_selection_unavailable_reason)
     selection_config = SliceSelectionConfig(strategy=config.slice_strategy, count=config.slice_count)
     registry, labels = stages.run("LABELS", index.index_id,
         lambda: _labels(config, root, source, index))
@@ -381,11 +407,15 @@ def load_prepared_dataset(path: str | Path) -> PreparedDataset:
         payload.get("labels", {}), payload.get("leakage_bypassed", False))
     if payload.get("lineage") != result.lineage:
         raise ValueError("saved lineage does not match component contracts")
-    if result.preparation_manifest_uri != str(manifest_path):
+    stored_manifest_path = Path(result.preparation_manifest_uri)
+    if not stored_manifest_path.is_absolute():
+        stored_manifest_path = manifest_path.parent / stored_manifest_path
+    if stored_manifest_path.resolve() != manifest_path:
         raise ValueError("manifest URI does not match loaded path")
     if set(result.fold_assignments.values()) - set(plan.fold_ids):
         raise ValueError("saved fold assignments reference an unknown fold")
-    artifacts = {name: JsonArtifactStore.load_json(_artifact_reference(ref))
+    artifacts = {name: JsonArtifactStore.load_json(_artifact_reference({
+                     **ref, "uri": str(_resolve_artifact_uri(ref["uri"], manifest_path.parent))}))
                  for name, ref in result.artifacts.items()}
     expected = {"dataset_index": index.to_dict(), "target_registry": registry.to_dict(),
         "fold_plan": plan.to_dict(),
@@ -642,6 +672,15 @@ def _geometry_material(ordered):
             for key, value in ordered.items()}
 
 
+def _geometry_unavailable_reason(ordered):
+    fallback = sorted(series_id for series_id, value in ordered.items()
+                      if value["ordering"].method not in {"geometry", "position_inferred_normal"})
+    if fallback:
+        return (f"Physical geometry unavailable for {len(fallback)} of {len(ordered)} series; "
+                "ordering used fallback metadata")
+    return None
+
+
 def _orientation(ordered, config: OrientationConfig):
     records, warnings = [], []
     for series_id, value in ordered.items():
@@ -650,6 +689,20 @@ def _orientation(ordered, config: OrientationConfig):
                         "provenance": provenance.to_dict()})
         warnings.extend(provenance.warnings)
     return records, digest(records), tuple(sorted(set(warnings))), False, len(records)
+
+
+def _orientation_unavailable_reason(records):
+    unavailable = []
+    for record in records:
+        provenance = record["provenance"]
+        orientation = provenance["orientation"]
+        laterality = provenance["laterality"]
+        if orientation["confidence"] == "unknown" or laterality["confidence"] == "unknown":
+            unavailable.append(record["series_id"])
+    if unavailable:
+        return (f"Orientation or laterality evidence unavailable for "
+                f"{len(unavailable)} of {len(records)} series")
+    return None
 
 
 def _select(ordered, config: SliceSelectionConfig):
@@ -664,6 +717,14 @@ def _select(ordered, config: SliceSelectionConfig):
                         selected_slice_ids=[item.slice_id for item in result.selected if item is not None])
         records.append(material)
     return records, digest(records), tuple(sorted(set(warnings))), False, len(records)
+
+
+def _selection_unavailable_reason(records):
+    fallback = sum(bool(record.get("fallback")) for record in records)
+    if fallback:
+        return (f"Requested slice-selection capability unavailable for {fallback} of "
+                f"{len(records)} series; recorded fallback selection was used")
+    return None
 
 
 def _labels(config: PreparationConfig, root: Path, source, index: DatasetIndex):
@@ -844,8 +905,10 @@ def _finalize(index, source_content, registry, labels, assignments, plan, leakag
     refs = {"dataset_index": index_ref.to_dict()}
     refs.update({name: store.put_json(value, manifest={"kind": name}).to_dict() for name, value in values.items()})
     synthetic = config.mode == "synthetic"
+    stages = (*prior_stages, StageRecord("FINALIZE", dataset.dataset_version_id,
+        dataset.dataset_version_id, "PASS", 0.0, records_processed=1))
     result = PreparedDataset("SYNTHETIC" if synthetic else "READY", synthetic, dataset, index,
-        plan, assignments, registry, leakage, preprocessing, refs, statistics, prior_stages,
+        plan, assignments, registry, leakage, preprocessing, refs, statistics, stages,
         str(path), labels=labels, leakage_bypassed=synthetic and config.allow_synthetic_leakage_bypass and not leakage.passed)
     return result, dataset.dataset_version_id, (), False, 1
 
@@ -874,3 +937,8 @@ def _resolve(base: Path, value: str | Path) -> Path:
 def _artifact_reference(value: Mapping[str, Any]):
     from .contracts import ArtifactReference
     return ArtifactReference(**dict(value))
+
+
+def _resolve_artifact_uri(uri: str, base: Path) -> Path:
+    path = Path(uri)
+    return path.resolve() if path.is_absolute() else (base / path).resolve()

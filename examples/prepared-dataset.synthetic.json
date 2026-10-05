@@ -1,0 +1,755 @@
+{
+  "artifacts": {
+    "dataset_index": {
+      "artifact_id": "08d84e2d98b8f2ec1a0ac5fbf77f3232ff7924e110c1030d475c28d125d0a77e",
+      "manifest": {
+        "index_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+        "kind": "dataset_index"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "08d84e2d98b8f2ec1a0ac5fbf77f3232ff7924e110c1030d475c28d125d0a77e",
+      "uri": "prepared-dataset.synthetic-artifacts/08d84e2d98b8f2ec1a0ac5fbf77f3232ff7924e110c1030d475c28d125d0a77e.json"
+    },
+    "fold_assignments": {
+      "artifact_id": "f2171988000b4192149865ef1bdaf30dc4e62f7d85f6ae1c372c6fb270a83031",
+      "manifest": {
+        "kind": "fold_assignments"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "f2171988000b4192149865ef1bdaf30dc4e62f7d85f6ae1c372c6fb270a83031",
+      "uri": "prepared-dataset.synthetic-artifacts/f2171988000b4192149865ef1bdaf30dc4e62f7d85f6ae1c372c6fb270a83031.json"
+    },
+    "fold_plan": {
+      "artifact_id": "f7c24e1f0c1e523a005f8ad9afdbba566b4f2afb23862802ff86d0dc49135a75",
+      "manifest": {
+        "kind": "fold_plan"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "f7c24e1f0c1e523a005f8ad9afdbba566b4f2afb23862802ff86d0dc49135a75",
+      "uri": "prepared-dataset.synthetic-artifacts/f7c24e1f0c1e523a005f8ad9afdbba566b4f2afb23862802ff86d0dc49135a75.json"
+    },
+    "labels": {
+      "artifact_id": "cb664cdba21b342144a9e45dac7288640c97aacdbb25ae070e39cdb20afd912f",
+      "manifest": {
+        "kind": "labels"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "cb664cdba21b342144a9e45dac7288640c97aacdbb25ae070e39cdb20afd912f",
+      "uri": "prepared-dataset.synthetic-artifacts/cb664cdba21b342144a9e45dac7288640c97aacdbb25ae070e39cdb20afd912f.json"
+    },
+    "leakage_report": {
+      "artifact_id": "b4fb243665f4a86dd42d410e6be0de50c467b627134755f69c0a742d14bd441c",
+      "manifest": {
+        "kind": "leakage_report"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "b4fb243665f4a86dd42d410e6be0de50c467b627134755f69c0a742d14bd441c",
+      "uri": "prepared-dataset.synthetic-artifacts/b4fb243665f4a86dd42d410e6be0de50c467b627134755f69c0a742d14bd441c.json"
+    },
+    "orientation_provenance": {
+      "artifact_id": "3d35d16f1df7603d83c9dc9a06a4161f74e561a1ded462d1685cfc44698239a7",
+      "manifest": {
+        "kind": "orientation_provenance"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "3d35d16f1df7603d83c9dc9a06a4161f74e561a1ded462d1685cfc44698239a7",
+      "uri": "prepared-dataset.synthetic-artifacts/3d35d16f1df7603d83c9dc9a06a4161f74e561a1ded462d1685cfc44698239a7.json"
+    },
+    "selected_slices": {
+      "artifact_id": "bb3561cf035c850a64ad0ad8fd361b3f17a79116fddd3310f1369425e33239be",
+      "manifest": {
+        "kind": "selected_slices"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "bb3561cf035c850a64ad0ad8fd361b3f17a79116fddd3310f1369425e33239be",
+      "uri": "prepared-dataset.synthetic-artifacts/bb3561cf035c850a64ad0ad8fd361b3f17a79116fddd3310f1369425e33239be.json"
+    },
+    "source_content": {
+      "artifact_id": "faaf7a36e449ac338578375b50bda5ecab714396a0e57dda5e89e81816065250",
+      "manifest": {
+        "kind": "source_content"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "faaf7a36e449ac338578375b50bda5ecab714396a0e57dda5e89e81816065250",
+      "uri": "prepared-dataset.synthetic-artifacts/faaf7a36e449ac338578375b50bda5ecab714396a0e57dda5e89e81816065250.json"
+    },
+    "target_registry": {
+      "artifact_id": "0fcdf19b0e2bdfb935426e5ecfee076c6f87eb81ebe775ae71b297f60c2c9b53",
+      "manifest": {
+        "kind": "target_registry"
+      },
+      "media_type": "application/json",
+      "schema_version": 1,
+      "sha256": "0fcdf19b0e2bdfb935426e5ecfee076c6f87eb81ebe775ae71b297f60c2c9b53",
+      "uri": "prepared-dataset.synthetic-artifacts/0fcdf19b0e2bdfb935426e5ecfee076c6f87eb81ebe775ae71b297f60c2c9b53.json"
+    }
+  },
+  "dataset_index": {
+    "discovery_version": "1",
+    "index_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+    "manifest_schema_version": 1,
+    "metadata_files": [],
+    "root_identity": "7484b90b13650e3df7c25948658b4fd5b2b0f6393c1e66ba379a8c5b29c6b5d2",
+    "statistics": {
+      "duplicate_sop_uid_count": 0,
+      "invalid_files": 0,
+      "metadata_files": 0,
+      "missing_uid_count": 0,
+      "n_series": 2,
+      "n_slices": 4,
+      "n_studies": 2
+    },
+    "studies": [
+      {
+        "metadata": {
+          "n_series": 1,
+          "patient_id": "synthetic_patient_01",
+          "study_instance_uid": "synthetic_study_01"
+        },
+        "patient_id": "synthetic_patient_01",
+        "relative_paths": [
+          "synthetic_study_01/synthetic_series_01/01.dcm",
+          "synthetic_study_01/synthetic_series_01/02.dcm"
+        ],
+        "series": [
+          {
+            "metadata": {
+              "ImageOrientationPatient": [
+                1,
+                0,
+                0,
+                0,
+                1,
+                0
+              ],
+              "ImagePositionPatient": null,
+              "InstanceNumber": null,
+              "Laterality": "L",
+              "PatientID": "synthetic_patient_01",
+              "SOPInstanceUID": null,
+              "SeriesInstanceUID": "synthetic_series_01",
+              "StudyInstanceUID": "synthetic_study_01",
+              "metadata_warnings": []
+            },
+            "n_slices": 2,
+            "relative_paths": [
+              "synthetic_study_01/synthetic_series_01/01.dcm",
+              "synthetic_study_01/synthetic_series_01/02.dcm"
+            ],
+            "series_id": "ccb0100ab4ee44b21b0a41a8b13fe5fd5d58ba292c40859ede2613796db1abc5",
+            "series_instance_uid": "synthetic_series_01",
+            "slices": [
+              {
+                "file_size": 0,
+                "metadata": {
+                  "ImageOrientationPatient": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0
+                  ],
+                  "ImagePositionPatient": [
+                    0,
+                    0,
+                    0.0
+                  ],
+                  "InstanceNumber": 1,
+                  "Laterality": "L",
+                  "PatientID": "synthetic_patient_01",
+                  "SOPInstanceUID": "synthetic_slice_01_01",
+                  "SeriesInstanceUID": "synthetic_series_01",
+                  "StudyInstanceUID": "synthetic_study_01",
+                  "metadata_warnings": []
+                },
+                "relative_path": "synthetic_study_01/synthetic_series_01/01.dcm",
+                "slice_id": "d9a42a2aaf6fdae5f0c8a058bb7ba6256d590b187822128ef4582b43e2674f39",
+                "warnings": []
+              },
+              {
+                "file_size": 0,
+                "metadata": {
+                  "ImageOrientationPatient": [
+                    1,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0
+                  ],
+                  "ImagePositionPatient": [
+                    0,
+                    0,
+                    2.5
+                  ],
+                  "InstanceNumber": 2,
+                  "Laterality": "L",
+                  "PatientID": "synthetic_patient_01",
+                  "SOPInstanceUID": "synthetic_slice_01_02",
+                  "SeriesInstanceUID": "synthetic_series_01",
+                  "StudyInstanceUID": "synthetic_study_01",
+                  "metadata_warnings": []
+                },
+                "relative_path": "synthetic_study_01/synthetic_series_01/02.dcm",
+                "slice_id": "65edfb3d537a31f08397cd0370535fee328d9fc0d612313f16af198bf6e252c1",
+                "warnings": []
+              }
+            ],
+            "study_instance_uid": "synthetic_study_01",
+            "warnings": []
+          }
+        ],
+        "study_id": "2a14f309f294f16e3e09ce4673237e769b711061bd292fb2fe3bcc2eed58c23c",
+        "study_instance_uid": "synthetic_study_01",
+        "warnings": []
+      },
+      {
+        "metadata": {
+          "n_series": 1,
+          "patient_id": "synthetic_patient_02",
+          "study_instance_uid": "synthetic_study_02"
+        },
+        "patient_id": "synthetic_patient_02",
+        "relative_paths": [
+          "synthetic_study_02/synthetic_series_02/01.dcm",
+          "synthetic_study_02/synthetic_series_02/02.dcm"
+        ],
+        "series": [
+          {
+            "metadata": {
+              "InstanceNumber": null,
+              "PatientID": "synthetic_patient_02",
+              "SOPInstanceUID": null,
+              "SeriesInstanceUID": "synthetic_series_02",
+              "StudyInstanceUID": "synthetic_study_02",
+              "metadata_warnings": []
+            },
+            "n_slices": 2,
+            "relative_paths": [
+              "synthetic_study_02/synthetic_series_02/01.dcm",
+              "synthetic_study_02/synthetic_series_02/02.dcm"
+            ],
+            "series_id": "66c7f593a87199920683dadc72bc637ae8998562025efbbf6bc87259bb1daeda",
+            "series_instance_uid": "synthetic_series_02",
+            "slices": [
+              {
+                "file_size": 0,
+                "metadata": {
+                  "InstanceNumber": 1,
+                  "PatientID": "synthetic_patient_02",
+                  "SOPInstanceUID": "synthetic_slice_02_01",
+                  "SeriesInstanceUID": "synthetic_series_02",
+                  "StudyInstanceUID": "synthetic_study_02",
+                  "metadata_warnings": []
+                },
+                "relative_path": "synthetic_study_02/synthetic_series_02/01.dcm",
+                "slice_id": "af6ceaa28c32d0dfbe454d0baf4f028059b912428a6777a3c7fd95b479da366b",
+                "warnings": []
+              },
+              {
+                "file_size": 0,
+                "metadata": {
+                  "InstanceNumber": 2,
+                  "PatientID": "synthetic_patient_02",
+                  "SOPInstanceUID": "synthetic_slice_02_02",
+                  "SeriesInstanceUID": "synthetic_series_02",
+                  "StudyInstanceUID": "synthetic_study_02",
+                  "metadata_warnings": []
+                },
+                "relative_path": "synthetic_study_02/synthetic_series_02/02.dcm",
+                "slice_id": "bbbe65b0e521f92b96f7869fad49d00d50d16e930610762dd08d0b4034a33abe",
+                "warnings": []
+              }
+            ],
+            "study_instance_uid": "synthetic_study_02",
+            "warnings": []
+          }
+        ],
+        "study_id": "6791658029acf33b0284472a40674f6abb596852d84d94f903bc0018997d681e",
+        "study_instance_uid": "synthetic_study_02",
+        "warnings": []
+      }
+    ],
+    "warnings": []
+  },
+  "dataset_version": {
+    "class_names": [
+      "ACL",
+      "MCL",
+      "Medial Meniscus",
+      "Lateral Meniscus",
+      "Medial OA",
+      "Lateral OA",
+      "PF OA",
+      "Effusion",
+      "Synovitis",
+      "Baker's",
+      "Contusion",
+      "Fracture"
+    ],
+    "dataset_index_artifact_id": "08d84e2d98b8f2ec1a0ac5fbf77f3232ff7924e110c1030d475c28d125d0a77e",
+    "dataset_version_id": "8dcccecb88a369d7cb2a9e442b46a85ceeddc52adda5c5521c94ed70d1a92c88",
+    "name": "RSNA",
+    "preprocessing": {
+      "dataset_index_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+      "folds": {
+        "assignment_manifest_sha256": "9f8706106c97cf7d27fb37ab15452e9e6afc121026f407c3e591b825739ace72",
+        "generator_manifest_id": "d10955e587288992a2296983c083be2daf1e5271d79385bf0c909687dbd11596",
+        "n_folds": 2,
+        "seed": 42,
+        "strategy": "group"
+      },
+      "geometry": {
+        "methods": {
+          "66c7f593a87199920683dadc72bc637ae8998562025efbbf6bc87259bb1daeda": "instance_number",
+          "ccb0100ab4ee44b21b0a41a8b13fe5fd5d58ba292c40859ede2613796db1abc5": "geometry"
+        },
+        "strict": false
+      },
+      "labels_sha256": "170996d984af4fe89ed97502cb61cd7837657717df9dc055e88ea22451f0056e",
+      "leakage": {
+        "allow_synthetic_bypass": false,
+        "policy": "strict"
+      },
+      "orientation": {
+        "conflict_policy": "ambiguous",
+        "laterality_text_fallback": true,
+        "minor_variation_deg": 0.25,
+        "normalization_mode": "preserve_native",
+        "orientation_consistency_tolerance_deg": 1.0,
+        "plane_tolerance_deg": 15.0
+      },
+      "orientation_provenance_sha256": "e13b9d811f1edcf3ce8df46cfb66749ed034acb10b84d409a2e96b59df2cbe07",
+      "preprocessing_id": "7af4fd3b91a9e39fdafa34137e37cecbad05d9ad889efb17fe131cb6985774a3",
+      "schema_version": 1,
+      "selected_slice_ids_sha256": "05f7ef6ef2cf3b7f5ebd53de006508a6f558d5f845e04e0c0684aa13bbf01f1b",
+      "slice_selection": {
+        "allow_fallback": true,
+        "count": 2,
+        "fallback_policy": "uniform",
+        "geometry_config": {
+          "duplicate_policy": "warn",
+          "duplicate_position_tolerance_mm": 0.001,
+          "orientation_tolerance_deg": 1.0,
+          "position_tolerance_mm": 0.001,
+          "spacing_outlier_factor": 2.0,
+          "strict_geometry": false
+        },
+        "geometry_requirement": "valid_projected_coordinates_for_physical_span; otherwise_explicit_fallback",
+        "ordering_assumption": "geometry.order_series_slices",
+        "short_series_policy": "keep_all",
+        "strategy": "physical_span"
+      },
+      "source_manifest_sha256": "19f9112b3d6e092b0d4e76553707424baf0da7b577cf095640ee95c2407134ed",
+      "target_registry_id": "1b36dc5e943dbc04ee72732fd63db41434a580564ae7322f339c3b69641cc357",
+      "target_schema_id": "0c5a4cf1f5610f929d8875ef63d73fdc2302c777fe5ee1029de9dc04231534e4"
+    },
+    "preprocessing_version": "7af4fd3b91a9e39fdafa34137e37cecbad05d9ad889efb17fe131cb6985774a3",
+    "schema_version": 2,
+    "source_manifest_sha256": "19f9112b3d6e092b0d4e76553707424baf0da7b577cf095640ee95c2407134ed",
+    "synthetic": true,
+    "target_registry_id": "1b36dc5e943dbc04ee72732fd63db41434a580564ae7322f339c3b69641cc357",
+    "target_schema_version": 1,
+    "uri": "",
+    "version": "1"
+  },
+  "fold_assignments": {
+    "2a14f309f294f16e3e09ce4673237e769b711061bd292fb2fe3bcc2eed58c23c": "fold_0",
+    "6791658029acf33b0284472a40674f6abb596852d84d94f903bc0018997d681e": "fold_1"
+  },
+  "fold_plan": {
+    "assignment_manifest_sha256": "9f8706106c97cf7d27fb37ab15452e9e6afc121026f407c3e591b825739ace72",
+    "configuration": {
+      "generator_manifest_id": "d10955e587288992a2296983c083be2daf1e5271d79385bf0c909687dbd11596",
+      "grouping": "patient",
+      "n_folds": 2
+    },
+    "dataset_version_id": "8dcccecb88a369d7cb2a9e442b46a85ceeddc52adda5c5521c94ed70d1a92c88",
+    "fold_ids": [
+      "fold_0",
+      "fold_1"
+    ],
+    "fold_plan_id": "bcbc964c3d5e767d97a974579c00d1fe3f01cf9e4dc7d3173261384cd6aa4e5b",
+    "random_state": 42,
+    "schema_version": 1,
+    "strategy": "group",
+    "synthetic": true,
+    "version": "1"
+  },
+  "labels": {
+    "2a14f309f294f16e3e09ce4673237e769b711061bd292fb2fe3bcc2eed58c23c": {
+      "patient_id": "synthetic_patient_01",
+      "provenance": "manual_review",
+      "values": {
+        "ACL": 0,
+        "Baker's": 1,
+        "Contusion": 0,
+        "Effusion": 1,
+        "Fracture": 1,
+        "Lateral Meniscus": 1,
+        "Lateral OA": 1,
+        "MCL": 1,
+        "Medial Meniscus": 0,
+        "Medial OA": 0,
+        "PF OA": 0,
+        "Synovitis": 0
+      }
+    },
+    "6791658029acf33b0284472a40674f6abb596852d84d94f903bc0018997d681e": {
+      "patient_id": "synthetic_patient_02",
+      "provenance": "manual_review",
+      "values": {
+        "ACL": 1,
+        "Baker's": 0,
+        "Contusion": 1,
+        "Effusion": 0,
+        "Fracture": 0,
+        "Lateral Meniscus": 0,
+        "Lateral OA": 0,
+        "MCL": 0,
+        "Medial Meniscus": 1,
+        "Medial OA": 1,
+        "PF OA": 1,
+        "Synovitis": 1
+      }
+    }
+  },
+  "leakage_bypassed": false,
+  "leakage_report": {
+    "checked_entities": {
+      "n_file_hashes_checked": 0,
+      "n_patients_checked": 2,
+      "n_series_checked": 2,
+      "n_slices_checked": 4,
+      "n_studies_checked": 2
+    },
+    "counts": {
+      "issues_by_type": {},
+      "n_errors": 0,
+      "n_file_hashes_checked": 0,
+      "n_infos": 0,
+      "n_issues": 0,
+      "n_patients_checked": 2,
+      "n_series_checked": 2,
+      "n_slices_checked": 4,
+      "n_studies_checked": 2,
+      "n_warnings": 0
+    },
+    "dataset_version_id": "8dcccecb88a369d7cb2a9e442b46a85ceeddc52adda5c5521c94ed70d1a92c88",
+    "fold_plan_id": "bcbc964c3d5e767d97a974579c00d1fe3f01cf9e4dc7d3173261384cd6aa4e5b",
+    "input_material_sha256": "45715e0ffdd6714ab2ac92b54a3b6509a4d7d2e4404612de2d744c7a562158bb",
+    "issues": [],
+    "passed": true,
+    "policy": "strict",
+    "provenance": {
+      "assignment_manifest_sha256": "9f8706106c97cf7d27fb37ab15452e9e6afc121026f407c3e591b825739ace72",
+      "assignment_source": "explicit",
+      "dataset_index_artifact_id": "08d84e2d98b8f2ec1a0ac5fbf77f3232ff7924e110c1030d475c28d125d0a77e",
+      "dataset_index_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+      "n_label_provenance_records": 0,
+      "n_parent_artifact_links": 0,
+      "n_source_entity_links": 0
+    },
+    "report_id": "5a4a25fdb4be01cbee735f5a58bcb0611314d002341a6cb733e507a742077b32",
+    "schema_version": 1,
+    "timestamp": "2026-10-05T12:29:33.468706+00:00",
+    "validator_version": "1.0.0"
+  },
+  "lineage": {
+    "assignment_manifest_sha256": "9f8706106c97cf7d27fb37ab15452e9e6afc121026f407c3e591b825739ace72",
+    "dataset_index_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+    "dataset_version_id": "8dcccecb88a369d7cb2a9e442b46a85ceeddc52adda5c5521c94ed70d1a92c88",
+    "fold_plan_id": "bcbc964c3d5e767d97a974579c00d1fe3f01cf9e4dc7d3173261384cd6aa4e5b",
+    "leakage_report_id": "5a4a25fdb4be01cbee735f5a58bcb0611314d002341a6cb733e507a742077b32",
+    "preprocessing_id": "7af4fd3b91a9e39fdafa34137e37cecbad05d9ad889efb17fe131cb6985774a3",
+    "source_manifest_sha256": "19f9112b3d6e092b0d4e76553707424baf0da7b577cf095640ee95c2407134ed",
+    "target_registry_id": "1b36dc5e943dbc04ee72732fd63db41434a580564ae7322f339c3b69641cc357",
+    "target_schema_id": "0c5a4cf1f5610f929d8875ef63d73fdc2302c777fe5ee1029de9dc04231534e4"
+  },
+  "preparation_manifest_uri": "prepared-dataset.synthetic.json",
+  "preprocessing_spec": {
+    "dataset_index_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+    "folds": {
+      "assignment_manifest_sha256": "9f8706106c97cf7d27fb37ab15452e9e6afc121026f407c3e591b825739ace72",
+      "generator_manifest_id": "d10955e587288992a2296983c083be2daf1e5271d79385bf0c909687dbd11596",
+      "n_folds": 2,
+      "seed": 42,
+      "strategy": "group"
+    },
+    "geometry": {
+      "methods": {
+        "66c7f593a87199920683dadc72bc637ae8998562025efbbf6bc87259bb1daeda": "instance_number",
+        "ccb0100ab4ee44b21b0a41a8b13fe5fd5d58ba292c40859ede2613796db1abc5": "geometry"
+      },
+      "strict": false
+    },
+    "labels_sha256": "170996d984af4fe89ed97502cb61cd7837657717df9dc055e88ea22451f0056e",
+    "leakage": {
+      "allow_synthetic_bypass": false,
+      "policy": "strict"
+    },
+    "orientation": {
+      "conflict_policy": "ambiguous",
+      "laterality_text_fallback": true,
+      "minor_variation_deg": 0.25,
+      "normalization_mode": "preserve_native",
+      "orientation_consistency_tolerance_deg": 1.0,
+      "plane_tolerance_deg": 15.0
+    },
+    "orientation_provenance_sha256": "e13b9d811f1edcf3ce8df46cfb66749ed034acb10b84d409a2e96b59df2cbe07",
+    "preprocessing_id": "7af4fd3b91a9e39fdafa34137e37cecbad05d9ad889efb17fe131cb6985774a3",
+    "schema_version": 1,
+    "selected_slice_ids_sha256": "05f7ef6ef2cf3b7f5ebd53de006508a6f558d5f845e04e0c0684aa13bbf01f1b",
+    "slice_selection": {
+      "allow_fallback": true,
+      "count": 2,
+      "fallback_policy": "uniform",
+      "geometry_config": {
+        "duplicate_policy": "warn",
+        "duplicate_position_tolerance_mm": 0.001,
+        "orientation_tolerance_deg": 1.0,
+        "position_tolerance_mm": 0.001,
+        "spacing_outlier_factor": 2.0,
+        "strict_geometry": false
+      },
+      "geometry_requirement": "valid_projected_coordinates_for_physical_span; otherwise_explicit_fallback",
+      "ordering_assumption": "geometry.order_series_slices",
+      "short_series_policy": "keep_all",
+      "strategy": "physical_span"
+    },
+    "source_manifest_sha256": "19f9112b3d6e092b0d4e76553707424baf0da7b577cf095640ee95c2407134ed",
+    "target_registry_id": "1b36dc5e943dbc04ee72732fd63db41434a580564ae7322f339c3b69641cc357",
+    "target_schema_id": "0c5a4cf1f5610f929d8875ef63d73fdc2302c777fe5ee1029de9dc04231534e4"
+  },
+  "schema_version": 1,
+  "stages": [
+    {
+      "duration_seconds": 0.0,
+      "input_id": "c2faeb34c548fd95fa88c11e8f2637b7cce2f09ec8826fd0ae2422e7d75a9dbf",
+      "output_id": "a359a501a0c910ff3eefe80703a63ed8f34a8f2262bd780f7236bf417e432d1f",
+      "reason": null,
+      "records_processed": 2,
+      "reused": false,
+      "stage": "DISCOVER",
+      "status": "PASS",
+      "warnings": []
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "a359a501a0c910ff3eefe80703a63ed8f34a8f2262bd780f7236bf417e432d1f",
+      "output_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+      "reason": null,
+      "records_processed": 4,
+      "reused": false,
+      "stage": "INDEX",
+      "status": "PASS",
+      "warnings": [
+        "index cache mode: cold_build"
+      ]
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+      "output_id": "da946c6a7d1db6edc128febe0e885e5eace871ef34d7ebce893115397c3b9f6d",
+      "reason": "Physical geometry unavailable for 1 of 2 series; ordering used fallback metadata",
+      "records_processed": 2,
+      "reused": false,
+      "stage": "GEOMETRY",
+      "status": "UNAVAILABLE",
+      "warnings": [
+        "not all slices have valid image positions",
+        "ordering uses InstanceNumber because spatial coordinates were unavailable"
+      ]
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "da946c6a7d1db6edc128febe0e885e5eace871ef34d7ebce893115397c3b9f6d",
+      "output_id": "e13b9d811f1edcf3ce8df46cfb66749ed034acb10b84d409a2e96b59df2cbe07",
+      "reason": "Orientation or laterality evidence unavailable for 1 of 2 series",
+      "records_processed": 2,
+      "reused": false,
+      "stage": "ORIENTATION",
+      "status": "UNAVAILABLE",
+      "warnings": [
+        "missing ImageOrientationPatient"
+      ]
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "7d4ad1ae27fede86b6c5116d7b665e233eb2e40906cef1fcc03538da225cbb60",
+      "output_id": "05f7ef6ef2cf3b7f5ebd53de006508a6f558d5f845e04e0c0684aa13bbf01f1b",
+      "reason": "Requested slice-selection capability unavailable for 1 of 2 series; recorded fallback selection was used",
+      "records_processed": 2,
+      "reused": false,
+      "stage": "SELECT",
+      "status": "UNAVAILABLE",
+      "warnings": [
+        "not all slices have valid image positions",
+        "ordering uses InstanceNumber because spatial coordinates were unavailable",
+        "physical_span fallback used: uniform",
+        "physical_span unavailable (2/2 positions missing); used uniform"
+      ]
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "a9bfaab9bb43901cc3d9d9c73b5003c54f727c445bb5b5e613b750d290143441",
+      "output_id": "54cbbab23e1eb24aeb0c722fb513d7a5c442a66cf951816d3e7b5f209bfee182",
+      "reason": null,
+      "records_processed": 2,
+      "reused": false,
+      "stage": "LABELS",
+      "status": "PASS",
+      "warnings": []
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "2660195dd2192d75beb9a530e095c10678e445f13cf37814643865b8e6f333c0",
+      "output_id": "9f8706106c97cf7d27fb37ab15452e9e6afc121026f407c3e591b825739ace72",
+      "reason": null,
+      "records_processed": 2,
+      "reused": false,
+      "stage": "FOLDS",
+      "status": "PASS",
+      "warnings": []
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "9f8706106c97cf7d27fb37ab15452e9e6afc121026f407c3e591b825739ace72",
+      "output_id": "5a4a25fdb4be01cbee735f5a58bcb0611314d002341a6cb733e507a742077b32",
+      "reason": null,
+      "records_processed": 10,
+      "reused": false,
+      "stage": "LEAKAGE",
+      "status": "PASS",
+      "warnings": []
+    },
+    {
+      "duration_seconds": 0.0,
+      "input_id": "8dcccecb88a369d7cb2a9e442b46a85ceeddc52adda5c5521c94ed70d1a92c88",
+      "output_id": "8dcccecb88a369d7cb2a9e442b46a85ceeddc52adda5c5521c94ed70d1a92c88",
+      "reason": null,
+      "records_processed": 1,
+      "reused": false,
+      "stage": "FINALIZE",
+      "status": "PASS",
+      "warnings": []
+    }
+  ],
+  "statistics": {
+    "assigned_studies": 2,
+    "fold_cache_mode": "cold_build",
+    "index_cache_mode": "cold_build",
+    "labeled_studies": 2,
+    "patients": 2,
+    "selected_slices": 4,
+    "series": 2,
+    "slices": 4,
+    "studies": 2
+  },
+  "status": "SYNTHETIC",
+  "synthetic": true,
+  "target_registry": {
+    "schema_version": 1,
+    "targets": [
+      {
+        "aliases": [
+          "Anterior Cruciate Ligament",
+          "ACL injury",
+          "anterior cruciate ligament injury"
+        ],
+        "index": 0,
+        "name": "ACL"
+      },
+      {
+        "aliases": [
+          "Medial Collateral Ligament",
+          "MCL injury",
+          "medial collateral ligament injury"
+        ],
+        "index": 1,
+        "name": "MCL"
+      },
+      {
+        "aliases": [
+          "Medial Meniscus Tear"
+        ],
+        "index": 2,
+        "name": "Medial Meniscus"
+      },
+      {
+        "aliases": [
+          "Lateral Meniscus Tear"
+        ],
+        "index": 3,
+        "name": "Lateral Meniscus"
+      },
+      {
+        "aliases": [
+          "Medial Osteoarthritis",
+          "Medial-compartment osteoarthritis"
+        ],
+        "index": 4,
+        "name": "Medial OA"
+      },
+      {
+        "aliases": [
+          "Lateral Osteoarthritis",
+          "Lateral-compartment osteoarthritis"
+        ],
+        "index": 5,
+        "name": "Lateral OA"
+      },
+      {
+        "aliases": [
+          "Patellofemoral Osteoarthritis",
+          "Patellofemoral OA"
+        ],
+        "index": 6,
+        "name": "PF OA"
+      },
+      {
+        "aliases": [
+          "Joint Effusion"
+        ],
+        "index": 7,
+        "name": "Effusion"
+      },
+      {
+        "aliases": [],
+        "index": 8,
+        "name": "Synovitis"
+      },
+      {
+        "aliases": [
+          "Baker's Cyst",
+          "Bakers",
+          "Baker Cyst"
+        ],
+        "index": 9,
+        "name": "Baker's"
+      },
+      {
+        "aliases": [
+          "Bone Contusion",
+          "Bone Bruise"
+        ],
+        "index": 10,
+        "name": "Contusion"
+      },
+      {
+        "aliases": [],
+        "index": 11,
+        "name": "Fracture"
+      }
+    ]
+  }
+}
