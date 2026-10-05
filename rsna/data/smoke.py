@@ -31,9 +31,68 @@ INJECTIONS = {"patient-leakage", "duplicate-sop", "orientation-conflict",
               "hierarchy-mismatch"}
 
 
+class _StageReport:
+    """Collect sequential stage status and monotonic elapsed time."""
+
+    def __init__(self) -> None:
+        self.stages: list[dict[str, Any]] = []
+        self._active: dict[str, Any] | None = None
+        self._started: float | None = None
+        self.output_dir_ready = False
+
+    def start(self, name: str) -> None:
+        self.finish("PASS")
+        if any(stage["name"] == name for stage in self.stages):
+            raise ValueError(f"duplicate smoke stage: {name}")
+        self._active = {"name": name}
+        self._started = time.perf_counter()
+
+    def finish(self, status: str) -> None:
+        if self._active is None:
+            return
+        assert self._started is not None
+        self._active["status"] = status
+        self._active["elapsed_seconds"] = round(max(0.0, time.perf_counter() - self._started), 6)
+        self.stages.append(self._active)
+        self._active = None
+        self._started = None
+
+    def fail(self) -> str | None:
+        name = self._active["name"] if self._active else None
+        self.finish("FAIL")
+        return name
+
+    def snapshot(self) -> list[dict[str, Any]]:
+        return [*self.stages, *([dict(self._active)] if self._active else [])]
+
+
 def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
                    injection: str | None = None,
                    synthetic_config: SyntheticConfig | None = None) -> dict[str, Any]:
+    """Run synthetic stages and include a failing stage report if execution raises."""
+    started = time.perf_counter()
+    stages = _StageReport()
+    try:
+        result = _run_data_smoke(output_dir, seed=seed, injection=injection,
+                                 synthetic_config=synthetic_config, stages=stages)
+        result["duration_seconds"] = round(time.perf_counter() - started, 3)
+        _write_json(Path(output_dir) / "smoke-summary.json", result)
+        return result
+    except Exception as exc:
+        failed_stage = stages.fail()
+        root = Path(output_dir)
+        if stages.output_dir_ready and root.is_dir():
+            _write_json(root / "smoke-summary.json", {
+                "status": "FAIL", "synthetic": True, "failed_stage": failed_stage,
+                "error": str(exc), "stages": stages.snapshot(),
+                "duration_seconds": round(time.perf_counter() - started, 3),
+            })
+        raise
+
+
+def _run_data_smoke(output_dir: str | Path, *, seed: int,
+                    injection: str | None, synthetic_config: SyntheticConfig | None,
+                    stages: _StageReport) -> dict[str, Any]:
     """Run generation, indexing, geometry, labels, folds and artifact round-trip checks."""
     if injection is not None and injection not in INJECTIONS:
         raise ValueError(f"unknown injection {injection!r}; choose from {sorted(INJECTIONS)}")
@@ -42,13 +101,17 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     if root.exists() and any(root.iterdir()):
         raise FileExistsError(f"smoke output directory must be empty: {root}")
     root.mkdir(parents=True, exist_ok=True)
+    stages.output_dir_ready = True
     raw = root / "raw"
     config = synthetic_config or SyntheticConfig(seed=seed, injection=injection)
     if config.seed != seed or config.injection != injection:
         raise ValueError("synthetic_config seed and injection must match smoke arguments")
+    stages.start("fixture_generation")
     generated = generate_synthetic_dataset(config, raw)
+    stages.start("discovery_and_index")
     cache_path = root / "index" / "index.sqlite3"
     cold = load_or_refresh(raw, cache_path, on_invalid="strict")
+    stages.start("cache_validation")
     if injection == "corrupted-cache":
         cache_path.write_bytes(b"intentionally corrupted synthetic cache")
         try:
@@ -56,7 +119,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         except ValueError as exc:
             if "cache" not in str(exc).lower():
                 raise AssertionError("corrupted cache failed for an unexpected reason") from exc
-            return _injected_summary(root, generated, injection, "cache validation rejected corruption")
+            return _injected_summary(root, generated, injection, "cache validation rejected corruption",
+                                     stages=stages, failed_stage="cache_validation")
         raise AssertionError("corrupted cache was accepted")
     warm = load_or_refresh(raw, cache_path, on_invalid="strict")
     if cold.report.mode != "cold-build" or warm.report.mode != "warm-load" or warm.report.reparsed:
@@ -65,7 +129,24 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     if index.index_id != cold.index.index_id:
         raise AssertionError("cold and warm index identities differ")
     save_manifest(index, root / "index" / "manifest.json")
+    stages.start("index_metadata_validation")
+    if injection == "duplicate-sop":
+        if index.statistics["duplicate_sop_uid_count"] == 0:
+            raise AssertionError("duplicate SOP injection was not detected by the index")
+        return _injected_summary(root, generated, injection, "duplicate SOPInstanceUID detected",
+                                 stages=stages, failed_stage="index_metadata_validation")
+    if injection == "missing-metadata":
+        missing = sum(item.metadata.get("PixelSpacing") is None
+            for study in index.studies for series in study.series for item in series.slices)
+        if not missing:
+            raise AssertionError("missing PixelSpacing injection was not detected")
+        return _injected_summary(root, generated, injection,
+                                 "missing PixelSpacing metadata detected", details={"missing_fields": missing},
+                                 stages=stages, failed_stage="index_metadata_validation")
+    if index.statistics["duplicate_sop_uid_count"]:
+        raise AssertionError("happy path contains duplicate SOPInstanceUIDs")
     if injection == "hierarchy-mismatch":
+        stages.start("hierarchy_validation")
         from ..folds.cli import load_dataset
 
         studies = [study.to_dict() for study in index.studies]
@@ -83,8 +164,10 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
                 raise AssertionError("hierarchy mismatch failed for an unexpected reason") from exc
             return _injected_summary(root, generated, injection,
                 "Fold CLI rejected Series StudyInstanceUID parent mismatch",
-                details={"parent_study_uid": parent_uid, "declared_study_uid": conflicting_uid})
+                details={"parent_study_uid": parent_uid, "declared_study_uid": conflicting_uid},
+                stages=stages, failed_stage="hierarchy_validation")
         raise AssertionError("Fold CLI accepted a Series StudyInstanceUID parent mismatch")
+    stages.start("targets_and_labels")
     target_rows = _load_targets(raw / "targets.csv")
     index_uids = {study.study_instance_uid for study in index.studies if study.study_instance_uid}
     if set(target_rows) != index_uids:
@@ -103,24 +186,20 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
                       for record in label_records]
     if {item.study.study_id for item in linked_records} != index_uids:
         raise AssertionError("synthetic label contracts did not link through StudyInstanceUID")
-    if injection == "duplicate-sop":
-        if index.statistics["duplicate_sop_uid_count"] == 0:
-            raise AssertionError("duplicate SOP injection was not detected by the index")
-        return _injected_summary(root, generated, injection, "duplicate SOPInstanceUID detected")
-    if injection == "missing-metadata":
-        missing = sum(item.metadata.get("PixelSpacing") is None
-            for study in index.studies for series in study.series for item in series.slices)
-        if not missing:
-            raise AssertionError("missing PixelSpacing injection was not detected")
-        return _injected_summary(root, generated, injection,
-                                 "missing PixelSpacing metadata detected", details={"missing_fields": missing})
-    if index.statistics["duplicate_sop_uid_count"]:
-        raise AssertionError("happy path contains duplicate SOPInstanceUIDs")
-
+    stages.start("geometry")
     series_records = [series for study in index.studies for series in study.series]
     geometry_orderings = [order_series_slices(series) for series in series_records]
-    orientation_results = []
-    laterality_results = []
+    if injection == "spacing-irregular":
+        warnings = [warning for result in geometry_orderings for warning in result.warnings
+                    if warning.code == "irregular_spacing"]
+        if not warnings:
+            raise AssertionError("spacing irregularity injection was not detected")
+        return _injected_summary(root, generated, injection,
+                                 "irregular physical slice spacing detected",
+                                 details={"warning_count": len(warnings)}, stages=stages,
+                                 failed_stage="geometry")
+
+    stages.start("slice_selection")
     selector24 = SliceSelector(SliceSelectionConfig("physical_span", 24))
     selector16 = SliceSelector(SliceSelectionConfig("uniform", 16))
     selector32 = SliceSelector(SliceSelectionConfig("physical_span", 32))
@@ -131,14 +210,6 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     selections24 = [selector24.select(series) for series in ordered_series]
     selections16 = [selector16.select(series) for series in ordered_series]
     selections32 = [selector32.select(series) for series in ordered_series]
-    for series in series_records:
-        metadata = [item.metadata for item in series.slices]
-        orientation_results.append(describe_series_orientation(metadata).to_dict())
-        laterality_results.append(resolve_series_laterality(metadata).to_dict())
-    plane_counts = {plane: sum(item["plane"] == plane for item in orientation_results)
-                    for plane in ("sagittal", "coronal", "axial")}
-    laterality_counts = {side: sum(item["resolved"] == side for item in laterality_results)
-                         for side in ("LEFT", "RIGHT")}
     geometry_ordering_proven = all(ordered.method == "geometry" for ordered in geometry_orderings) and all(
         result.selected_positions_mm == tuple(sorted(result.selected_positions_mm))
         for result in selections24 if all(p is not None for p in result.selected_positions_mm)
@@ -157,15 +228,20 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
             raise AssertionError("missing-position injection did not produce an explicit fallback warning")
         return _injected_summary(root, generated, injection, "physical-span fallback warning recorded",
                                  details={"fallback_series": len(fallback),
-                                          "ordering_method": ordering_fallback[0].method})
-    if injection == "spacing-irregular":
-        warnings = [warning for result in geometry_orderings for warning in result.warnings
-                    if warning.code == "irregular_spacing"]
-        if not warnings:
-            raise AssertionError("spacing irregularity injection was not detected")
-        return _injected_summary(root, generated, injection,
-                                 "irregular physical slice spacing detected",
-                                 details={"warning_count": len(warnings)})
+                                          "ordering_method": ordering_fallback[0].method},
+                                 stages=stages, failed_stage="slice_selection")
+
+    stages.start("orientation_and_laterality")
+    orientation_results = []
+    laterality_results = []
+    for series in series_records:
+        metadata = [item.metadata for item in series.slices]
+        orientation_results.append(describe_series_orientation(metadata).to_dict())
+        laterality_results.append(resolve_series_laterality(metadata).to_dict())
+    plane_counts = {plane: sum(item["plane"] == plane for item in orientation_results)
+                    for plane in ("sagittal", "coronal", "axial")}
+    laterality_counts = {side: sum(item["resolved"] == side for item in laterality_results)
+                         for side in ("LEFT", "RIGHT")}
     if injection == "orientation-conflict":
         if not any(item["consistency"] == "inconsistent" for item in orientation_results) or not any(
                 any(w.code == "inconsistent_orientation" for w in result.warnings)
@@ -174,7 +250,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         if not any(item["resolved"] == "AMBIGUOUS" for item in laterality_results):
             raise AssertionError("laterality conflict injection was not detected")
         return _injected_summary(root, generated, injection,
-                                 "orientation and laterality conflicts detected")
+                                 "orientation and laterality conflicts detected", stages=stages,
+                                 failed_stage="orientation_and_laterality")
     if not geometry_ordering_proven or not instance_number_trap_proven:
         raise AssertionError("selected slices are not ordered by physical geometry")
     if any(item["consistency"] == "inconsistent" for item in orientation_results):
@@ -182,6 +259,7 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     if not all(plane_counts.values()) or not all(laterality_counts.values()):
         raise AssertionError("synthetic geometry/laterality did not cover all canonical cases")
 
+    stages.start("fold_plan_and_leakage_guard")
     preprocessing24 = asdict(selector24.config)
     preprocessing16 = asdict(selector16.config)
     preprocessing32 = asdict(selector32.config)
@@ -228,7 +306,8 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
             return _injected_summary(root, generated, injection,
                 "patient leakage blocked by LeakageGuard",
                 details={"leakage_report_id": leakage_result.report_id,
-                         "issue_types": sorted({issue.type.value for issue in leakage_result.issues})})
+                         "issue_types": sorted({issue.type.value for issue in leakage_result.issues})},
+                stages=stages, failed_stage="fold_plan_and_leakage_guard")
         raise AssertionError("patient leakage injection passed the leakage guard")
     require_valid_leakage_report(leakage_result)
     leakage = leakage_result.to_dict()
@@ -239,6 +318,7 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
     if fold_plan.fold_plan_id == other_plan.fold_plan_id:
         raise AssertionError("fold seed change did not change FoldPlan identity")
 
+    stages.start("artifact_round_trip_and_provenance")
     index2 = root / "index"
     (root / "folds").mkdir(parents=True, exist_ok=True)
     _write_json(index2 / "target-schema.json", {"registry": "official TargetRegistry",
@@ -331,10 +411,9 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         "tests": {"cold_warm_identity": "PASS", "preprocessing_identity": "PASS", "fold_seed_identity": "PASS",
                   "serialization_reload": "PASS", "output_location": "PASS",
                   "instance_number_trap": "PASS"}}
-    summary["duration_seconds"] = round(time.perf_counter() - started, 3)
-
     # Publish READY only after all integrity gates pass; validate the serialized
     # provenance before atomically exposing the prepared artifact.
+    stages.start("prepared_dataset_readiness")
     prepared_path = root / "prepared" / "prepared-dataset.json"
     pending_path = prepared_path.with_name("prepared-dataset.json.pending")
     prepared = {"status": "READY", "readiness_scope": "metadata-only prepared-data integrity",
@@ -358,7 +437,9 @@ def run_data_smoke(output_dir: str | Path, *, seed: int = 42,
         pending_path.unlink(missing_ok=True)
         raise AssertionError("prepared READY artifact failed persisted provenance validation")
     pending_path.replace(prepared_path)
-    _write_json(root / "smoke-summary.json", summary)
+    stages.finish("PASS")
+    summary["stages"] = stages.snapshot()
+    summary["duration_seconds"] = round(time.perf_counter() - started, 3)
     return summary
 
 
@@ -389,10 +470,13 @@ def _write_json(path: Path, data: Any) -> None:
 
 
 def _injected_summary(root: Path, generated: dict, injection: str, detected: str,
-                      *, details: dict | None = None) -> dict:
+                      *, details: dict | None = None, stages: _StageReport,
+                      failed_stage: str) -> dict:
+    if not stages._active or stages._active["name"] != failed_stage:
+        raise AssertionError(f"injected failure stage mismatch: expected {failed_stage}")
+    stages.finish("FAIL")
     summary = {"status": "EXPECTED_FAILURE", "synthetic": True, "injection": injection,
-               "detected": detected, **generated}
+               "detected": detected, "stages": stages.snapshot(), **generated}
     if details:
         summary.update(details)
-    _write_json(root / "smoke-summary.json", summary)
     return summary

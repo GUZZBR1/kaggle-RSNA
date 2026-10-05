@@ -64,10 +64,15 @@ class DatasetCliTests(unittest.TestCase):
         self.assertEqual(0, help_result.returncode, help_result.stderr)
         self.assertIn("--inject", help_result.stdout)
         self.assertIn("hierarchy-mismatch", help_result.stdout)
+        normal = run_cli("synthetic", "smoke")
+        self.assertEqual(0, normal.returncode, normal.stderr)
+        normal_output = json.loads(normal.stdout)
+        self.assertEqual("READY", normal_output["status"])
+        self.assertIn("stages", normal_output)
         with tempfile.TemporaryDirectory() as temp:
             result = run_cli("synthetic", "smoke", "--seed", 42,
                              "--inject", "patient-leakage", "--keep", temp)
-            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(2, result.returncode, result.stderr)
             output = json.loads(result.stdout)
             self.assertEqual("EXPECTED_FAILURE", output["status"])
             self.assertIn("PATIENT_CROSS_FOLD", output["issue_types"])
@@ -75,11 +80,17 @@ class DatasetCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             result = run_cli("synthetic", "smoke", "--seed", 42,
                              "--inject", "hierarchy-mismatch", "--keep", temp)
-            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(2, result.returncode, result.stderr)
             output = json.loads(result.stdout)
             self.assertEqual("EXPECTED_FAILURE", output["status"])
             self.assertIn("Fold CLI rejected Series StudyInstanceUID parent mismatch", output["detected"])
             self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
+
+    def test_synthetic_smoke_unexpected_failure_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "existing.txt").write_text("keep", encoding="utf-8")
+            result = run_cli("synthetic", "smoke", "--keep", temp)
+        self.assertEqual(3, result.returncode)
 
     def test_summary_human_json_and_manifest_inspection(self):
         human = run_cli("data", "summary", "--manifest", self.manifest)

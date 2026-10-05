@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rsna.data.smoke import run_data_smoke
 from rsna.data.synthetic import SyntheticConfig
@@ -40,6 +41,13 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
             "slice_leakage": 0, "status": "PASS",
         })
         self.assertEqual(first["leakage_report_id"], second["leakage_report_id"])
+        self.assertGreaterEqual(first["duration_seconds"], 0)
+        self.assertTrue(first["stages"])
+        self.assertEqual(len(first["stages"]), len({stage["name"] for stage in first["stages"]}))
+        self.assertTrue(all(stage["status"] == "PASS" for stage in first["stages"]))
+        self.assertTrue(all(stage["elapsed_seconds"] >= 0 for stage in first["stages"]))
+        self.assertTrue(all({"name", "status", "elapsed_seconds"} <= stage.keys()
+                            for stage in first["stages"]))
         with tempfile.TemporaryDirectory() as temp:
             artifact = self.run_smoke(temp)
             ready_path = Path(temp) / "prepared" / "prepared-dataset.json"
@@ -75,13 +83,28 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
             "corrupted-cache": "cache validation rejected corruption",
             "hierarchy-mismatch": "Fold CLI rejected Series StudyInstanceUID parent mismatch",
         }
+        expected_stage = {
+            "patient-leakage": "fold_plan_and_leakage_guard",
+            "duplicate-sop": "index_metadata_validation",
+            "orientation-conflict": "orientation_and_laterality",
+            "missing-position": "slice_selection",
+            "missing-metadata": "index_metadata_validation",
+            "spacing-irregular": "geometry",
+            "corrupted-cache": "cache_validation",
+            "hierarchy-mismatch": "hierarchy_validation",
+        }
         for injection in ("patient-leakage", "duplicate-sop", "orientation-conflict",
                           "missing-position", "missing-metadata", "spacing-irregular", "corrupted-cache",
                           "hierarchy-mismatch"):
             with self.subTest(injection=injection), tempfile.TemporaryDirectory() as temp:
                 result = self.run_smoke(temp, injection=injection)
                 self.assertNotEqual(result["status"], "READY")
+                self.assertGreaterEqual(result["duration_seconds"], 0)
                 self.assertIn(expected_detection[injection], result["detected"])
+                failed = [stage for stage in result["stages"] if stage["status"] == "FAIL"]
+                self.assertEqual(1, len(failed))
+                self.assertEqual(expected_stage[injection], failed[0]["name"])
+                self.assertGreaterEqual(failed[0]["elapsed_seconds"], 0)
                 self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
                 if injection == "missing-position":
                     self.assertEqual(result["status"], "EXPECTED_FAILURE")
@@ -105,6 +128,20 @@ class SyntheticSmokeIntegrationTests(unittest.TestCase):
             self.assertNotEqual(result["status"], "READY")
             self.assertIn("PATIENT_CROSS_FOLD", result["issue_types"])
             self.assertFalse((Path(temp) / "prepared" / "prepared-dataset.json").exists())
+
+    def test_unexpected_stage_exception_is_reported_as_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            with patch("rsna.data.smoke._load_targets", side_effect=RuntimeError("bad labels")):
+                with self.assertRaisesRegex(RuntimeError, "bad labels"):
+                    run_data_smoke(temp, seed=42)
+            report = json.loads((Path(temp) / "smoke-summary.json").read_text(encoding="utf-8"))
+        self.assertEqual("FAIL", report["status"])
+        self.assertEqual("targets_and_labels", report["failed_stage"])
+        self.assertGreaterEqual(report["duration_seconds"], 0)
+        failed = [stage for stage in report["stages"] if stage["status"] == "FAIL"]
+        self.assertEqual(1, len(failed))
+        self.assertEqual("targets_and_labels", failed[0]["name"])
+        self.assertGreaterEqual(failed[0]["elapsed_seconds"], 0)
 
 
 if __name__ == "__main__":
