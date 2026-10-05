@@ -196,7 +196,11 @@ def _dispatch(args: argparse.Namespace, config: dict[str, Any] | None = None) ->
         else:
             with tempfile.TemporaryDirectory(prefix="rsna-synthetic-smoke-") as temp:
                 result = run_data_smoke(temp, seed=args.seed, injection=args.inject)
-        return result, 0
+        if result["status"] == "READY":
+            return result, 0
+        if result["status"] == "EXPECTED_FAILURE":
+            return result, 2
+        return result, 1
     if args.group == "train":
         if args.train_command == "smoke":
             from .training.smoke import run_training_smoke

@@ -27,7 +27,10 @@ are runtime artifacts and are not committed. A retained output directory must be
 old DICOMs cannot mix with a new seed; choose a new directory for each kept run.
 
 The final JSON reports `status: READY`, material IDs, entity counts, cache behavior, label
-missingness, and named checks. `READY` means the metadata-only dataset artifacts passed
+missingness, named checks, total `duration_seconds`, and a `stages` list. Each stage has a
+unique `name`, a `status` (`PASS` or `FAIL`), and monotonic `elapsed_seconds`. The stage
+list includes only work reached by that run; injected faults mark the detected stage `FAIL`,
+and unexpected exceptions record the active stage before propagating. `READY` means the metadata-only dataset artifacts passed
 these infrastructure checks; it does not mean a model has been trained or clinically
 validated, scored on Kaggle, or made production-ready. The READY marker is persisted only
 after cache, leakage, serialization, and output-location checks pass. Its artifact records
@@ -70,8 +73,10 @@ python -m rsna synthetic smoke --inject hierarchy-mismatch
 ```
 
 Detected faults produce `status: EXPECTED_FAILURE` and an explanation in JSON, with exit
-code 0. Missing positions exercise a documented uniform fallback and warning rather than
-claiming physical-span ordering.
+code 2. This means the injection was detected; it is still a non-success process exit so
+automation cannot mistake the intentionally failing data for a passing smoke. Unexpected
+errors exit nonzero as well. Missing positions exercise a documented uniform fallback and
+warning rather than claiming physical-span ordering.
 
 ## Validating future changes
 
