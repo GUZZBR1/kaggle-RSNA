@@ -103,6 +103,9 @@ class CNN224DataAdapterTests(unittest.TestCase):
             self.assertTrue(np.allclose(stored[0, -1], 1.0))
             records[0].inputs[0, 0, 0, 0] = 0.375
             self.assertAlmostEqual(0.375, float(np.load(tensor_store_path, mmap_mode="r")[0, 0, 0, 0, 0]))
+            # Windows cannot remove a mapped file while either the NumPy map or
+            # tensors backed by that map are still alive.
+            del records, stored
 
     def test_short_series_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
