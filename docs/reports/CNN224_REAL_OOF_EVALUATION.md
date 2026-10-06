@@ -148,7 +148,7 @@ the findings above delimit checks that cannot be performed without inputs.
 | Comparison/report artifact | This audit report only |
 | Provenance manifest | Not created — upstream lineage absent |
 | OOF artifact ID / Evaluation ID | N/A |
-| PR | Not opened yet |
+| PR | [#68](https://github.com/GUZZBR1/kaggle-RSNA/pull/68) — open; CI succeeded |
 
 Next gate: complete Mini-MVP 2 and Mini-MVP 3, provide the frozen config and its hash,
 real DatasetVersion, labels/masks, canonical FoldPlan, and five consistent validation
